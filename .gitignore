@@ -1,0 +1,32 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# VS Code settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Optional: database files (if local SQLite)
+*.sqlite
+*.sqlite3
+
+# Optional: temporary files
+tmp/
