@@ -6,6 +6,7 @@ dotenv.config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN!;
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
+
 const bot = new Telegraf(BOT_TOKEN);
 
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
@@ -14,6 +15,29 @@ const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
   .filter(Boolean)
   .map(Number);
 
+let DRIVER_ID = process.env.DRIVER_TELEGRAM_ID
+  ? Number(process.env.DRIVER_TELEGRAM_ID)
+  : null;
+
+interface OrderItem {
+  foodId: string;
+  foodName: string;
+  foodPrice: number;
+  quantity: number;
+}
+
+interface Food {
+  id: string;
+  name: string;
+  price: number;
+  restaurant_id: string;
+}
+
+interface Restaurant {
+  id: string;
+  name: string;
+}
+
 interface UserState {
   step?: string;
   name?: string;
@@ -21,14 +45,18 @@ interface UserState {
   campus?: string;
   restaurantId?: string;
   restaurantName?: string;
-  foodId?: string;
-  foodName?: string;
-  foodPrice?: number;
-  quantity?: number;
+  cart?: OrderItem[];
+  cartFoods?: Food[];
   deliveryType?: "new" | "contract";
+  remainingContract?: number;
+  editFoodId?: string;
 }
 
 const states = new Map<number, UserState>();
+
+function isAdmin(id?: number) {
+  return id !== undefined && ADMIN_IDS.includes(id);
+}
 
 async function ensureUserRow(
   telegramId: number,
@@ -36,370 +64,350 @@ async function ensureUserRow(
   phone?: string,
   campus?: string
 ) {
-  const { data: existing } = await supabase
+  const { data: existing, error } = await supabase
     .from("users")
     .select("*")
     .eq("telegram_id", telegramId)
     .limit(1)
     .maybeSingle();
+  if (error) throw error;
+
   if (existing) {
     const updates: any = {};
     if (name && name !== existing.name) updates.name = name;
     if (phone && phone !== existing.phone) updates.phone = phone;
     if (campus && campus !== existing.campus) updates.campus = campus;
-    if (Object.keys(updates).length > 0) {
+    if (
+      existing.remaining_contract === null ||
+      existing.remaining_contract === undefined
+    ) {
+      updates.remaining_contract = 30;
+    }
+    if (Object.keys(updates).length > 0)
       await supabase
         .from("users")
         .update(updates)
         .eq("telegram_id", telegramId);
-    }
     return existing;
   } else {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("users")
-      .insert([{ telegram_id: telegramId, name, phone, campus }])
+      .insert([
+        {
+          telegram_id: telegramId,
+          name,
+          phone,
+          campus,
+          remaining_contract: 30,
+        },
+      ])
       .select()
       .maybeSingle();
-    if (error) throw error;
     return data;
   }
 }
 
-function isAdmin(id?: number) {
-  return id !== undefined && ADMIN_IDS.includes(id);
+function getMainMenuKeyboard(isAdminUser = false) {
+  const buttons: string[][] = [["📦 Start Order"], ["ℹ️ Help", "👋 Welcome"]];
+  if (isAdminUser) buttons.push(["✏️ Edit Foods", "💰 View Orders"]);
+  return Markup.keyboard(buttons).resize();
 }
 
-async function seedDefaultFoods(restaurantId: string) {
-  const defaultFoods = [
-    "Aynet",
-    "Pasta be atkilit",
-    "Pasta be sgo",
-    "Dnch",
-    "Firfir",
-    "Alcha firfir",
-    "Timatim lebleb",
-    "Timatim sils",
-    "Enkulal sils",
-    "Enkulal firfir",
-  ];
-  for (const f of defaultFoods) {
-    const { data: exists } = await supabase
-      .from("foods")
-      .select("*")
-      .eq("restaurant_id", restaurantId)
-      .eq("name", f)
-      .maybeSingle();
-    if (!exists) {
-      await supabase
-        .from("foods")
-        .insert({ name: f, price: 50, restaurant_id: restaurantId });
-    }
+function twoColumnKeyboard(items: string[]) {
+  const kb: string[][] = [];
+  for (let i = 0; i < items.length; i += 2) {
+    kb.push(items.slice(i, i + 2));
   }
+  return Markup.keyboard(kb).resize();
 }
 
-function buildKeyboardButtons(
-  items: any[],
-  callbackPrefix: string,
-  columns = 2
-) {
-  const keyboard: any[] = [];
-  for (let i = 0; i < items.length; i += columns) {
-    const row: any[] = [];
-    for (let j = 0; j < columns; j++) {
-      if (items[i + j]) {
-        row.push(
-          Markup.button.callback(
-            items[i + j].name +
-              (items[i + j].price ? ` (${items[i + j].price})` : ""),
-            `${callbackPrefix}_${items[i + j].id}`
-          )
-        );
-      }
-    }
-    keyboard.push(row);
-  }
-  return keyboard;
-}
-
-bot.start(async (ctx) => {
+async function sendWelcome(ctx: any) {
   const tid = ctx.from?.id!;
-  states.set(tid, { step: "ask_name" });
-  await ctx.reply("👋 Welcome! What's your full name?");
+  await ctx.reply(
+    "👋 Welcome to the Campus Food Delivery Bot!\nUse the menu below to get started.",
+    getMainMenuKeyboard(isAdmin(tid))
+  );
+}
+
+bot.start(sendWelcome);
+bot.hears("👋 Welcome", sendWelcome);
+
+bot.hears("ℹ️ Help", async (ctx) => {
+  await ctx.reply(
+    "📖 *Help Guide*\n\n" +
+      "1️⃣ Press '📦 Start Order' to begin a new order.\n" +
+      "2️⃣ Follow the steps to enter your name, phone, and campus.\n" +
+      "3️⃣ Choose your restaurant and foods.\n" +
+      "4️⃣ Choose delivery type: new or contract.\n" +
+      "5️⃣ Confirm your order and it will be sent to our driver 🚚.\n\n" +
+      "For any issues, contact support or an admin.",
+    { parse_mode: "Markdown" }
+  );
+});
+
+bot.hears("✏️ Edit Foods", async (ctx) => {
+  const tid = ctx.from?.id;
+  if (!isAdmin(tid)) return ctx.reply("❌ You are not an admin.");
+
+  const { data: foods } = await supabase
+    .from("foods")
+    .select("*")
+    .order("name");
+  if (!foods || foods.length === 0) return ctx.reply("No foods found to edit.");
+
+  const names = foods.map((f: Food) => `${f.name} (${f.price} ETB)`);
+  states.set(tid!, { step: "edit_select_food", cartFoods: foods });
+  return ctx.reply("Select a food to edit:", twoColumnKeyboard(names));
 });
 
 bot.on("text", async (ctx) => {
   const tid = ctx.from?.id!;
   const text = ctx.message.text.trim();
-  let state = states.get(tid) || { step: "ask_name" };
+  let state = states.get(tid) || { step: "" };
 
-  if (state.step === "ask_name") {
-    state.name = text;
-    state.step = "ask_phone";
-    states.set(tid, state);
-    await ctx.reply("📱 Please enter your phone number (digits only):");
-    return;
-  }
-
-  if (state.step === "ask_phone") {
-    const phoneRegex = /^[0-9]{6,13}$/;
-    if (!phoneRegex.test(text)) {
-      await ctx.reply("❌ Invalid phone. Enter digits only (6-13 digits).");
-      return;
+  if (!DRIVER_ID && ctx.message?.from?.is_bot === false) {
+    if (text === "/register_driver") {
+      DRIVER_ID = tid;
+      return ctx.reply("✅ You are now registered as the driver.");
     }
-    state.phone = text;
-    state.step = "choose_campus";
+  }
+
+  if (text === "📦 Start Order") {
+    const user = await ensureUserRow(tid);
+    const remaining = user.remaining_contract ?? 30;
+    states.set(tid, {
+      step: "ask_name",
+      cart: [],
+      remainingContract: remaining,
+    });
+
+    return ctx.reply("👋 What's your full name?");
+  }
+
+  if (state.step === "edit_select_food") {
+    const selectedFood = state.cartFoods?.find(
+      (f: Food) => `${f.name} (${f.price} ETB)` === text
+    );
+    if (!selectedFood) return ctx.reply("❌ Food not found. Try again.");
+
+    state.editFoodId = selectedFood.id;
+    state.step = "edit_enter_price";
     states.set(tid, state);
-    await ctx.reply(
-      "🏫 Select your campus:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("Main boy dorm", "campus_Main boy dorm")],
-        [Markup.button.callback("Main female dorm", "campus_Main female dorm")],
-        [Markup.button.callback("Techno boy dorm", "campus_Techno boy dorm")],
-        [
-          Markup.button.callback(
-            "Techno female dorm",
-            "campus_Techno female dorm"
-          ),
-        ],
-      ])
+    return ctx.reply(
+      `💰 Enter new price for *${selectedFood.name}* (current: ${selectedFood.price} ETB):`,
+      { parse_mode: "Markdown" }
     );
-    return;
   }
 
-  await ctx.reply("Send /start to begin an order.");
-});
+  if (state.step === "edit_enter_price") {
+    const price = parseFloat(text);
+    if (isNaN(price) || price <= 0) return ctx.reply("❌ Invalid price.");
 
-bot.action(/campus_(.+)/, async (ctx) => {
-  const tid = ctx.from?.id!;
-  const selected = ctx.match?.[1];
-  let state = states.get(tid);
-  if (!state || !selected) {
-    await ctx.answerCbQuery("Session expired. Send /start.").catch(() => {});
-    await ctx.editMessageText("❌ Session expired. Send /start to begin.");
-    return;
+    await supabase.from("foods").update({ price }).eq("id", state.editFoodId);
+    states.delete(tid);
+    return ctx.reply(`✅ Price updated successfully to ${price} ETB.`);
   }
 
-  state.campus = selected;
-  state.step = "choose_restaurant";
-  states.set(tid, state);
-  await ctx.answerCbQuery().catch(() => {});
+  switch (state.step) {
+    case "ask_name":
+      state.name = text;
+      state.step = "ask_phone";
+      states.set(tid, state);
+      return ctx.reply("📱 Enter your phone number:");
 
-  const { data: restaurants } = await supabase
-    .from("restaurants")
-    .select("*")
-    .order("name", { ascending: true });
+    case "ask_phone":
+      if (!/^[0-9]{6,13}$/.test(text))
+        return ctx.reply("❌ Invalid phone number.");
+      state.phone = text;
+      state.step = "choose_campus";
+      states.set(tid, state);
+      return ctx.reply(
+        "🏫 Choose your campus:",
+        twoColumnKeyboard([
+          "Main boy dorm",
+          "Main female dorm",
+          "Techno boy dorm",
+          "Techno female dorm",
+        ])
+      );
 
-  if (!restaurants || restaurants.length === 0) {
-    await ctx.editMessageText(
-      "No restaurants found. Ask admin to add restaurants."
-    );
-    return;
-  }
+    case "choose_campus":
+      const campuses = [
+        "Main boy dorm",
+        "Main female dorm",
+        "Techno boy dorm",
+        "Techno female dorm",
+      ];
+      if (!campuses.includes(text))
+        return ctx.reply("❌ Please choose a valid campus from the buttons.");
+      state.campus = text;
+      state.step = "choose_restaurant";
+      states.set(tid, state);
 
-  const keyboard = buildKeyboardButtons(restaurants, "rest", 2);
-  await ctx.editMessageText(
-    "🍽 Choose a restaurant or cafe:",
-    Markup.inlineKeyboard(keyboard)
-  );
-});
-
-bot.action(/rest_(.+)/, async (ctx) => {
-  const tid = ctx.from?.id!;
-  const restaurantId = ctx.match?.[1];
-  let state = states.get(tid);
-
-  if (!state || !restaurantId) {
-    await ctx.answerCbQuery("Session expired. Send /start.").catch(() => {});
-    await ctx.editMessageText("❌ Session expired. Send /start to begin.");
-    return;
-  }
-
-  const { data: r, error } = await supabase
-    .from("restaurants")
-    .select("*")
-    .eq("id", restaurantId)
-    .maybeSingle();
-
-  if (error || !r) {
-    await ctx.answerCbQuery("Restaurant not found.").catch(() => {});
-    await ctx.editMessageText(
-      "❌ Restaurant not found. Send /start to try again."
-    );
-    return;
-  }
-
-  state.restaurantId = r.id;
-  state.restaurantName = r.name;
-  state.step = "choose_food";
-  states.set(tid, state);
-  await ctx.answerCbQuery().catch(() => {});
-
-  let { data: foods } = await supabase
-    .from("foods")
-    .select("*")
-    .eq("restaurant_id", restaurantId);
-
-  if (!foods || foods.length === 0) {
-    await seedDefaultFoods(restaurantId);
-    const { data: newFoods } = await supabase
-      .from("foods")
-      .select("*")
-      .eq("restaurant_id", restaurantId);
-    foods = newFoods || [];
-  }
-
-  const keyboard = buildKeyboardButtons(foods, "food", 2);
-  await ctx.editMessageText(
-    "🍲 Select food (price shown):",
-    Markup.inlineKeyboard(keyboard)
-  );
-});
-
-bot.action(/food_(.+)/, async (ctx) => {
-  const tid = ctx.from?.id!;
-  const foodId = ctx.match?.[1];
-  let state = states.get(tid);
-
-  if (!state || !foodId) {
-    await ctx.answerCbQuery("Session expired. Send /start.").catch(() => {});
-    await ctx.editMessageText("❌ Session expired. Send /start to begin.");
-    return;
-  }
-
-  const { data: food } = await supabase
-    .from("foods")
-    .select("*")
-    .eq("id", foodId)
-    .maybeSingle();
-
-  if (!food) {
-    await ctx.answerCbQuery("Food not found.").catch(() => {});
-    return;
-  }
-
-  state.foodId = food.id;
-  state.foodName = food.name;
-  state.foodPrice = Number(food.price);
-  state.quantity = 1;
-  state.step = "choose_delivery";
-  states.set(tid, state);
-  await ctx.answerCbQuery().catch(() => {});
-
-  await ctx.editMessageText(
-    `You picked: ${state.foodName} — ${state.foodPrice}\nChoose delivery type:`,
-    Markup.inlineKeyboard([
-      Markup.button.callback("New Delivery", "delivery_new"),
-      Markup.button.callback("Contract Delivery", "delivery_contract"),
-    ])
-  );
-});
-
-bot.action(/delivery_(.+)/, async (ctx) => {
-  const tid = ctx.from?.id!;
-  const deliveryType = ctx.match?.[1] as "new" | "contract";
-  let state = states.get(tid);
-  if (!state || !deliveryType) {
-    await ctx.answerCbQuery("Session expired. Send /start.").catch(() => {});
-    await ctx.editMessageText("❌ Session expired. Send /start to begin.");
-    return;
-  }
-
-  state.deliveryType = deliveryType;
-  states.set(tid, state);
-  await ctx.answerCbQuery().catch(() => {});
-
-  const total = (state.foodPrice ?? 0) * (state.quantity ?? 1);
-  await ctx.editMessageText(
-    `Confirm order:\nName: ${state.name}\nPhone: ${state.phone}\nCampus: ${
-      state.campus
-    }\nRestaurant: ${state.restaurantName}\nFood: ${state.foodName}\nQty: ${
-      state.quantity
-    }\nDelivery: ${deliveryType}\nTotal: ${total.toFixed(2)}`,
-    Markup.inlineKeyboard([
-      Markup.button.callback("Confirm ✅", "confirm_order"),
-      Markup.button.callback("Cancel ❌", "cancel_order"),
-    ])
-  );
-});
-
-bot.action("confirm_order", async (ctx) => {
-  const tid = ctx.from?.id!;
-  const state = states.get(tid);
-  if (!state) {
-    await ctx.answerCbQuery("Session expired. Send /start.").catch(() => {});
-    return;
-  }
-
-  const userRow = await ensureUserRow(
-    tid,
-    state.name,
-    state.phone,
-    state.campus
-  );
-  if (!userRow) {
-    await ctx.answerCbQuery("User error.").catch(() => {});
-    return;
-  }
-
-  const total = (state.foodPrice ?? 0) * (state.quantity ?? 1);
-  await supabase.from("orders").insert([
-    {
-      user_id: userRow.id,
-      restaurant_id: state.restaurantId,
-      food_id: state.foodId,
-      delivery_type: state.deliveryType,
-      quantity: state.quantity ?? 1,
-      total_price: total,
-    },
-  ]);
-
-  await ctx.editMessageText(
-    `✅ Thank you! Your order was recorded. Total: ${total.toFixed(2)}`
-  );
-  states.delete(tid);
-});
-
-bot.action("cancel_order", async (ctx) => {
-  const tid = ctx.from?.id!;
-  states.delete(tid);
-  await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(
-    "❌ Order cancelled. Send /start to begin a new order."
-  );
-});
-
-bot.command("seed_cafes_foods", async (ctx) => {
-  if (!isAdmin(ctx.from?.id)) return ctx.reply("⛔ Not authorized.");
-  const cafes = [
-    "askuala",
-    "fike",
-    "mesi",
-    "pepsi",
-    "shewit",
-    "adonay",
-    "am",
-    "ahadu",
-    "selam",
-  ];
-  for (const cafe of cafes) {
-    let { data: rest } = await supabase
-      .from("restaurants")
-      .select("*")
-      .eq("name", cafe)
-      .maybeSingle();
-    if (!rest) {
-      const { data: newRest } = await supabase
+      const { data: restaurants } = await supabase
         .from("restaurants")
-        .insert({ name: cafe })
-        .select()
-        .maybeSingle();
-      rest = newRest;
-    }
-    await seedDefaultFoods(rest.id);
-  }
-  await ctx.reply("✅ All cafes and foods seeded correctly.");
-});
-export default bot;
+        .select("*")
+        .order("name");
+      if (!restaurants || restaurants.length === 0)
+        return ctx.reply("⚠️ No restaurants available right now.");
 
-bot.launch();
-console.log("🤖 Telegram bot is running...");
+      const restaurantNames = restaurants.map((r: Restaurant) => r.name);
+      states.set(tid, { ...state, cartFoods: [] });
+      return ctx.reply(
+        "🍴 Choose a restaurant:",
+        twoColumnKeyboard(restaurantNames)
+      );
+
+    case "choose_restaurant":
+      const { data: selectedRest } = await supabase
+        .from("restaurants")
+        .select("*")
+        .eq("name", text)
+        .maybeSingle();
+      if (!selectedRest)
+        return ctx.reply("❌ Please select a valid restaurant.");
+
+      state.restaurantId = selectedRest.id;
+      state.restaurantName = selectedRest.name;
+      state.step = "choose_food";
+
+      const { data: foods } = await supabase
+        .from("foods")
+        .select("*")
+        .eq("restaurant_id", selectedRest.id)
+        .order("name");
+      if (!foods || foods.length === 0)
+        return ctx.reply("⚠️ No foods found for this restaurant.");
+
+      state.cartFoods = foods;
+      states.set(tid, state);
+
+      const foodNames = foods.map((f: Food) => `${f.name} (${f.price} ETB)`);
+      return ctx.reply(
+        "🍛 Choose your food (add multiple items, then click '✅ Done'):",
+        twoColumnKeyboard([...foodNames, "✅ Done"])
+      );
+
+    case "choose_food":
+      if (text === "✅ Done") {
+        if (!state.cart || state.cart.length === 0)
+          return ctx.reply("❌ You must select at least one food.");
+        state.step = "choose_delivery";
+        states.set(tid, state);
+        return ctx.reply(
+          "🚚 Choose delivery type:",
+          twoColumnKeyboard(["new", "contract"])
+        );
+      }
+
+      const selectedFood = state.cartFoods?.find(
+        (f: Food) => `${f.name} (${f.price} ETB)` === text
+      );
+      if (!selectedFood)
+        return ctx.reply("❌ Please choose a valid food from the list.");
+
+      state.cart = state.cart || [];
+      state.cart.push({
+        foodId: selectedFood.id,
+        foodName: selectedFood.name,
+        foodPrice: selectedFood.price,
+        quantity: 1,
+      });
+      states.set(tid, state);
+
+      return ctx.reply(
+        `✅ Added ${selectedFood.name}. You can add more or click "✅ Done" when finished.`,
+        twoColumnKeyboard([
+          ...(state.cartFoods ?? []).map((f) => `${f.name} (${f.price} ETB)`),
+          "✅ Done",
+        ])
+      );
+
+    case "choose_delivery":
+      if (text !== "new" && text !== "contract")
+        return ctx.reply("❌ Choose a valid delivery type.");
+
+      state.deliveryType = text as "new" | "contract";
+      state.step = "confirm_order";
+      states.set(tid, state);
+
+      const cartItems = state.cart ?? [];
+      const totalPrice = cartItems.reduce(
+        (sum, i) => sum + i.foodPrice * i.quantity,
+        0
+      );
+
+      return ctx.reply(
+        `🛒 *Order Summary*\n\n🍽 ${state.restaurantName}\n${cartItems
+          .map((c) => `🍔 ${c.foodName} x${c.quantity}`)
+          .join("\n")}\n💰 Total: ${totalPrice} ETB\n` +
+          (state.deliveryType === "contract"
+            ? `🔢 Remaining contract orders: ${state.remainingContract}\n`
+            : "") +
+          `\n✅ Confirm order?`,
+        {
+          parse_mode: "Markdown",
+          ...Markup.keyboard([["✅ Confirm", "❌ Cancel"]]).resize(),
+        }
+      );
+
+    case "confirm_order":
+      if (text === "✅ Confirm") {
+        await ensureUserRow(tid, state.name, state.phone, state.campus);
+        const totalPrice =
+          state.cart?.reduce((sum, i) => sum + i.foodPrice * i.quantity, 0) ??
+          0;
+
+        const { data: insertedOrder } = await supabase
+          .from("orders")
+          .insert([
+            {
+              user_id: tid,
+              restaurant_id: state.restaurantId,
+              total_price: totalPrice,
+              delivery_type: state.deliveryType,
+              created_at: new Date(),
+            },
+          ])
+          .select()
+          .maybeSingle();
+
+        let newRemaining = state.remainingContract;
+        if (state.deliveryType === "contract") {
+          newRemaining = (state.remainingContract ?? 0) - 1;
+          await supabase
+            .from("users")
+            .update({ remaining_contract: newRemaining })
+            .eq("telegram_id", tid);
+        }
+
+        if (DRIVER_ID && insertedOrder) {
+          await bot.telegram.sendMessage(
+            DRIVER_ID,
+            `🚨 *New Order Received* 🚨
+
+👤 Name: ${state.name}
+🏫 Campus: ${state.campus}
+🍽 Restaurant: ${state.restaurantName}
+🛒 Items:
+${state.cart?.map((c) => `- ${c.foodName} x${c.quantity}`).join("\n")}
+💰 Total: ${totalPrice} ETB
+🚚 Delivery: ${state.deliveryType}`,
+            { parse_mode: "Markdown" }
+          );
+        }
+
+        states.delete(tid);
+        return ctx.reply(
+          "🎉 Your order has been placed successfully!\nWe’ll deliver it soon 🚚.",
+          getMainMenuKeyboard()
+        );
+      } else if (text === "❌ Cancel") {
+        states.delete(tid);
+        return ctx.reply("❌ Order cancelled.", getMainMenuKeyboard());
+      }
+      break;
+  }
+});
+
+export default bot;
