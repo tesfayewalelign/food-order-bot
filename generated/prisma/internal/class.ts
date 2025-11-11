@@ -23,7 +23,7 @@ const config: runtime.GetPrismaClientConfig = {
       "value": "prisma-client"
     },
     "output": {
-      "value": "/home/tesfaye/food-delivery-bot/generated/prisma",
+      "value": "/home/geta/Development/Nodejs/food-order-bot/generated/prisma",
       "fromEnvVar": null
     },
     "config": {
@@ -37,7 +37,7 @@ const config: runtime.GetPrismaClientConfig = {
       }
     ],
     "previewFeatures": [],
-    "sourceFilePath": "/home/tesfaye/food-delivery-bot/prisma/schema.prisma",
+    "sourceFilePath": "/home/geta/Development/Nodejs/food-order-bot/prisma/schema.prisma",
     "isCustomOutput": true
   },
   "relativePath": "../../prisma",

@@ -26,6 +26,7 @@
     "express": "^5.1.0",
     "https-proxy-agent": "^7.0.6",
     "prisma": "^6.19.0",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "tsx": "^4.20.6"
   }
 }

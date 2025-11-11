@@ -7,13 +7,15 @@ dotenv.config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN!;
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
+const safeToken = encodeURIComponent(BOT_TOKEN);
+console.log("BOT_TOKEN", safeToken);
 
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(safeToken);
 
 handleUserFlow(bot);
 handleAdmin(bot);
 
-bot.launch();
+// bot.launch();
 console.log("🤖 Bot is running...");
 
 export default bot;
