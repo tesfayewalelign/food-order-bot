@@ -1,5 +1,5 @@
 export type UserState = {
-  step:
+  step?:
     | "ask_name"
     | "ask_phone"
     | "ask_campus"
@@ -8,7 +8,12 @@ export type UserState = {
     | "select_food"
     | "waiting_for_quantity"
     | "choose_delivery_type"
-    | "confirm_order";
+    | "confirm_order"
+    | "profile_ask_name"
+    | "profile_ask_phone"
+    | "profile_ask_campus"
+    | "profile_ask_dorm"
+    | undefined;
   foods: { name: string; quantity: number }[];
   cartFoods: { name: string; quantity: number }[];
   currentFood: string | undefined;

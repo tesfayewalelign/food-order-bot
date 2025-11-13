@@ -1,25 +1,22 @@
-import { Telegraf } from "telegraf";
+import { Telegraf, Context } from "telegraf";
 import dotenv from "dotenv";
 import { handleUserFlow } from "./handlers/userHandler.js";
-import { handleAdmin } from "./handlers/adminHandler.js";
-import { setupDriverHandler } from "./handlers/driverHandler.js";
 
 dotenv.config();
 
-const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
-  .split(",")
-  .map((id) => Number(id.trim()));
-
 const BOT_TOKEN = process.env.BOT_TOKEN!;
-if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
+if (!BOT_TOKEN) throw new Error("BOT_TOKEN is missing in .env");
 
-// ✅ No need to encode BOT_TOKEN — Telegraf handles it fine
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf<Context>(BOT_TOKEN);
 
 handleUserFlow(bot);
-handleAdmin(bot);
-setupDriverHandler(bot, ADMIN_IDS); // ✅ now bot exists
 
-console.log("🤖 Bot is running...");
+bot.catch((err, ctx) => {
+  console.error(`Error for user ${ctx.from?.id}:`, err);
+  ctx.reply("⚠️ Something went wrong. Please try again later.");
+});
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 export default bot;

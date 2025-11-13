@@ -22,12 +22,33 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const userId = ctx.from?.id!;
     resetUserState(userId);
 
-    const isAdmin = false;
-    const isDriver = false;
-    await ctx.reply(
-      "👋 Welcome to Campus Delivery!\nSelect an option below:",
-      getMainMenuKeyboard(isAdmin, isDriver)
-    );
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("telegram_id", userId)
+      .single();
+
+    if (profile) {
+      await ctx.reply(
+        `👋 Welcome back ${profile.name}!\nSelect an option below:`,
+        getMainMenuKeyboard(false, false)
+      );
+      return;
+    }
+
+    userState.set(userId, {
+      step: "profile_ask_name",
+      foods: [],
+      cartFoods: [],
+      currentFood: undefined,
+      deliveryType: undefined,
+      restaurant: undefined,
+      campus: undefined,
+      name: "",
+      phone: "",
+    });
+
+    await ctx.reply("📋 Welcome new user! What's your full name?");
   });
 
   bot.on("text", async (ctx) => {
@@ -35,22 +56,50 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const text = ctx.message?.text?.trim();
     if (!text) return;
 
-    const state: UserState | undefined = userState.get(userId);
+    let state: UserState | undefined = userState.get(userId);
 
     if (!state) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("telegram_id", userId)
+        .single();
+
       if (text === "🍔 Order Food") {
+        if (!profile) {
+          userState.set(userId, {
+            step: "profile_ask_name",
+            foods: [],
+            cartFoods: [],
+            currentFood: undefined,
+            deliveryType: undefined,
+            restaurant: undefined,
+            campus: undefined,
+            name: "",
+            phone: "",
+          });
+          await ctx.reply(
+            "📋 You need a profile first. What's your full name?"
+          );
+          return;
+        }
+
         userState.set(userId, {
-          step: "ask_name",
+          step: "select_food",
           foods: [],
           cartFoods: [],
           currentFood: undefined,
           deliveryType: undefined,
           restaurant: undefined,
-          campus: undefined,
-          name: "",
-          phone: "",
+          campus: profile.campus,
+          name: profile.name,
+          phone: profile.phone,
         });
-        await ctx.reply("📋 Let's start your order. What's your full name?");
+
+        await ctx.reply(
+          `🍔 Welcome ${profile.name}! Choose your restaurant:`,
+          restaurantKeyboard
+        );
         return;
       }
 
@@ -70,18 +119,45 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     }
 
     switch (state.step) {
-      case "ask_name":
+      case "profile_ask_name":
         state.name = text;
-        state.step = "ask_phone";
+        state.step = "profile_ask_phone";
         await ctx.reply("📞 Enter your phone number:");
-        break;
+        return;
 
-      case "ask_phone":
+      case "profile_ask_phone":
         state.phone = text;
-        state.step = "ask_campus";
-        await ctx.reply("🏫 Select your campus:", campusKeyboard);
-        break;
+        state.step = "profile_ask_campus";
+        await ctx.reply("🏫 Enter your campus:");
+        return;
 
+      case "profile_ask_campus":
+        state.campus = text;
+        state.step = "profile_ask_dorm";
+        await ctx.reply("🏠 Enter your dorm:");
+        return;
+
+      case "profile_ask_dorm":
+        const dorm = text;
+
+        await supabase.from("profiles").upsert({
+          telegram_id: userId,
+          name: state.name,
+          phone: state.phone,
+          campus: state.campus,
+          dorm,
+        });
+
+        resetUserState(userId);
+
+        await ctx.reply(
+          `✅ Profile created! Welcome ${state.name}.\nSelect an option below:`,
+          getMainMenuKeyboard(false, false)
+        );
+        return;
+    }
+
+    switch (state.step) {
       case "waiting_for_quantity":
         const count = parseInt(text);
         if (isNaN(count) || count <= 0) {
@@ -108,13 +184,11 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    const data = getCallbackData(ctx);
-    if (!data) return;
-    const match = data.match(/^campus_(.+)$/);
+    const match = getCallbackData(ctx)?.match(/^campus_(.+)$/);
     if (!match || !match[1]) return;
 
-    state.campus = match[1].replace(/_/g, " ");
-    state.step = "ask_restaurant";
+    state!.campus = match[1].replace(/_/g, " ");
+    state!.step = "ask_restaurant";
 
     await ctx.editMessageText("🍴 Choose your restaurant:", restaurantKeyboard);
     await ctx.answerCbQuery();
@@ -125,10 +199,8 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    const data = getCallbackData(ctx);
-    if (!data) return;
-    const match = data.match(/^restaurant_(.+)$/);
-    if (!match || !match[1]) return;
+    const match = getCallbackData(ctx)?.match(/^restaurant_(.+)$/);
+    if (!match) return;
 
     state.restaurant = match[1];
     state.foods = [];
@@ -146,10 +218,8 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    const data = getCallbackData(ctx);
-    if (!data) return;
-    const match = data.match(/^food_(.+)$/);
-    if (!match || !match[1]) return;
+    const match = getCallbackData(ctx)?.match(/^food_(.+)$/);
+    if (!match) return;
 
     state.currentFood = match[1];
     state.step = "waiting_for_quantity";
@@ -178,9 +248,7 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    const data = getCallbackData(ctx);
-    if (!data) return;
-    const match = data.match(/^delivery_(.+)$/);
+    const match = getCallbackData(ctx)?.match(/^delivery_(.+)$/);
     if (!match) return;
 
     state.deliveryType = match[1] as "new" | "contract";
