@@ -1,30 +1,73 @@
 import { Telegraf, Context } from "telegraf";
+import { supabase } from "../../config/supabase.js";
 import { userState, resetUserState, UserState } from "../../helpers/state.js";
 import {
+  getMainMenuKeyboard,
   campusKeyboard,
   restaurantKeyboard,
+  foodKeyboard,
   confirmKeyboard,
+  deliveryKeyboard,
 } from "../../helpers/keyboards.js";
-import { supabase } from "../../config/supabase.js";
-import {
-  getUserByPhone,
-  createUser,
-  decrementContract,
-} from "../../helpers/utils.js";
+
+let remainingContracts = 30;
+
+const getCallbackData = (ctx: Context): string | null => {
+  const callbackQuery = ctx.callbackQuery as { data?: string } | undefined;
+  return callbackQuery?.data ?? null;
+};
 
 export function handleUserFlow(bot: Telegraf<Context>) {
   bot.start(async (ctx) => {
     const userId = ctx.from?.id!;
     resetUserState(userId);
-    userState.set(userId, { step: "ask_name" });
-    await ctx.reply("👋 Welcome! Please enter your full name:");
+
+    const isAdmin = false;
+    const isDriver = false;
+    await ctx.reply(
+      "👋 Welcome to Campus Delivery!\nSelect an option below:",
+      getMainMenuKeyboard(isAdmin, isDriver)
+    );
   });
 
   bot.on("text", async (ctx) => {
     const userId = ctx.from?.id!;
-    const text = ctx.message.text;
+    const text = ctx.message?.text?.trim();
+    if (!text) return;
+
     const state: UserState | undefined = userState.get(userId);
-    if (!state) return;
+
+    if (!state) {
+      if (text === "🍔 Order Food") {
+        userState.set(userId, {
+          step: "ask_name",
+          foods: [],
+          cartFoods: [],
+          currentFood: undefined,
+          deliveryType: undefined,
+          restaurant: undefined,
+          campus: undefined,
+          name: "",
+          phone: "",
+        });
+        await ctx.reply("📋 Let's start your order. What's your full name?");
+        return;
+      }
+
+      if (text === "ℹ️ Help") {
+        await ctx.reply(
+          "📝 Help:\n1. 🍔 Order Food → Start a new order\n2. 📦 My Orders → Check past orders\n3. 🏠 Main Menu → Go back to main menu"
+        );
+        return;
+      }
+
+      if (text === "📦 My Orders") {
+        await ctx.reply("📂 You have no orders yet.");
+        return;
+      }
+
+      return;
+    }
 
     switch (state.step) {
       case "ask_name":
@@ -39,95 +82,169 @@ export function handleUserFlow(bot: Telegraf<Context>) {
         await ctx.reply("🏫 Select your campus:", campusKeyboard);
         break;
 
-      case "ask_campus":
-        if (!text.startsWith("🏫")) return;
-        state.campus = text.replace("🏫 ", "");
-        state.step = "ask_restaurant";
-        await ctx.reply("🍴 Choose your restaurant/cafe:", restaurantKeyboard);
-        break;
-
-      case "ask_restaurant":
-        if (!text.startsWith("🍽")) return;
-        state.restaurant = text.replace("🍽 ", "");
-        state.step = "ask_food";
-        await ctx.reply(
-          `🍔 What food would you like to order from ${state.restaurant}?`
-        );
-        break;
-
-      case "ask_food":
-        state.food = text;
-        state.step = "ask_count";
-        await ctx.reply("🔢 How many items do you want?");
-        break;
-
-      case "ask_count":
+      case "waiting_for_quantity":
         const count = parseInt(text);
         if (isNaN(count) || count <= 0) {
-          return ctx.reply("⚠️ Please enter a valid number.");
-        }
-        state.count = count;
-        state.step = "confirm";
-
-        let user = await getUserByPhone(state.phone!);
-        if (!user) {
-          user = await createUser({
-            telegram_id: userId,
-            phone: state.phone!,
-            name: state.name!,
-            campus: state.campus!,
-            is_contract: false,
-            remaining_contract: null,
-          });
+          await ctx.reply("⚠️ Please enter a valid number (e.g., 1, 2, 3).");
+          return;
         }
 
-        const remaining = user.is_contract
-          ? user.remaining_contract ?? 0
-          : "N/A";
-        const total = (state.count ?? 0) * 50;
+        if (state.currentFood) {
+          state.foods.push({ name: state.currentFood, quantity: count });
+          state.currentFood = undefined;
+        }
 
+        state.step = "select_food";
         await ctx.reply(
-          `🧾 Order Summary\n\n👤 Name: ${state.name}\n📞 Phone: ${state.phone}\n🏫 Campus: ${state.campus}\n🍽 Restaurant: ${state.restaurant}\n🍔 Food: ${state.food}\n🔢 Quantity: ${state.count}\n🚚 Remaining Deliveries: ${remaining}\n💰 Total: ${total} ETB`,
-          confirmKeyboard
+          "🍔 You can now choose another food or press ✅ Done when finished:",
+          foodKeyboard
         );
         break;
     }
   });
 
-  bot.action("confirm_order", async (ctx) => {
+  bot.action(/^campus_(.+)/, async (ctx) => {
     const userId = ctx.from?.id!;
-    const state: UserState | undefined = userState.get(userId);
-    if (!state) return ctx.reply("⚠️ No order in progress.");
+    const state = userState.get(userId);
+    if (!state) return;
 
-    const user = await getUserByPhone(state.phone!);
-    if (!user) return ctx.reply("⚠️ User not found.");
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^campus_(.+)$/);
+    if (!match || !match[1]) return;
 
-    if (user.is_contract) {
-      if (!user.remaining_contract || user.remaining_contract <= 0) {
-        return ctx.reply(
-          "🚫 Your contract deliveries are finished. Contact admin to renew."
-        );
-      }
-      const newRemaining = await decrementContract(state.phone!);
-      await ctx.reply(
-        `✅ Order confirmed!\n🚚 Deliveries left: ${newRemaining}`
-      );
-    } else {
-      await ctx.reply("✅ Order confirmed! (Pay per order)");
+    state.campus = match[1].replace(/_/g, " ");
+    state.step = "ask_restaurant";
+
+    await ctx.editMessageText("🍴 Choose your restaurant:", restaurantKeyboard);
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^restaurant_(.+)/, async (ctx) => {
+    const userId = ctx.from?.id!;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^restaurant_(.+)$/);
+    if (!match || !match[1]) return;
+
+    state.restaurant = match[1];
+    state.foods = [];
+    state.step = "select_food";
+
+    await ctx.editMessageText(
+      `🍔 Select foods from ${state.restaurant}. Press ✅ Done when finished:`,
+      foodKeyboard
+    );
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^food_(.+)/, async (ctx) => {
+    const userId = ctx.from?.id!;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^food_(.+)$/);
+    if (!match || !match[1]) return;
+
+    state.currentFood = match[1];
+    state.step = "waiting_for_quantity";
+
+    await ctx.reply(`🍽 You selected *${state.currentFood}*. Enter quantity:`, {
+      parse_mode: "Markdown",
+    });
+    await ctx.answerCbQuery();
+  });
+
+  bot.action("done_food", async (ctx) => {
+    const userId = ctx.from?.id!;
+    const state = userState.get(userId);
+    if (!state || !state.foods.length) {
+      await ctx.reply("⚠️ Please select at least one food before continuing.");
+      return;
     }
 
-    await supabase.from("orders").insert([
-      {
-        user_id: userId,
-        name: state.name!,
-        phone: state.phone!,
-        campus: state.campus!,
-        restaurant: state.restaurant!,
-        food: state.food!,
-        quantity: state.count ?? 0,
-        total: (state.count ?? 0) * 50,
-      },
-    ]);
+    state.step = "choose_delivery_type";
+    await ctx.reply("🚚 Choose delivery type:", deliveryKeyboard);
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^delivery_(.+)/, async (ctx) => {
+    const userId = ctx.from?.id!;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^delivery_(.+)$/);
+    if (!match) return;
+
+    state.deliveryType = match[1] as "new" | "contract";
+    state.step = "confirm_order";
+
+    const foodsList = state.foods
+      .map((f) => `${f.name} x${f.quantity}`)
+      .join(", ");
+    const totalPrice = state.foods.reduce((acc, f) => acc + f.quantity * 50, 0);
+
+    let contractInfo = "";
+    if (state.deliveryType === "contract") {
+      contractInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
+    }
+
+    await ctx.reply(
+      `🧾 *Final Order Summary*\n\n` +
+        `👤 Name: ${state.name}\n` +
+        `📞 Phone: ${state.phone}\n` +
+        `🏫 Campus: ${state.campus}\n` +
+        `🍽 Restaurant: ${state.restaurant}\n` +
+        `🍔 Foods: ${foodsList}\n` +
+        `🚚 Delivery Type: ${
+          state.deliveryType === "contract" ? "Contract" : "Pay"
+        }\n` +
+        `${contractInfo}\n` +
+        `💰 Total: ${totalPrice} ETB`,
+      { parse_mode: "Markdown", ...confirmKeyboard }
+    );
+
+    await ctx.answerCbQuery();
+  });
+
+  bot.action("confirm_order", async (ctx) => {
+    const userId = ctx.from?.id!;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    let contractInfo = "";
+    if (state.deliveryType === "contract") {
+      remainingContracts--;
+      contractInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
+    }
+
+    const foodsList = state.foods
+      .map((f) => `${f.name} x${f.quantity}`)
+      .join(", ");
+    const totalPrice = state.foods.reduce((acc, f) => acc + f.quantity * 50, 0);
+
+    await ctx.reply(
+      `✅ Order confirmed! Your delivery is being prepared.\n\n` +
+        `🧾 *Final Order Summary*\n\n` +
+        `👤 Name: ${state.name}\n` +
+        `📞 Phone: ${state.phone}\n` +
+        `🏫 Campus: ${state.campus}\n` +
+        `🍽 Restaurant: ${state.restaurant}\n` +
+        `🍔 Foods: ${foodsList}\n` +
+        `🚚 Delivery Type: ${
+          state.deliveryType === "contract" ? "Contract" : "Pay"
+        }\n` +
+        `${contractInfo}\n` +
+        `💰 Total: ${totalPrice} ETB`,
+      { parse_mode: "Markdown" }
+    );
 
     resetUserState(userId);
   });
@@ -135,8 +252,7 @@ export function handleUserFlow(bot: Telegraf<Context>) {
   bot.action("cancel_order", async (ctx) => {
     const userId = ctx.from?.id!;
     resetUserState(userId);
-    await ctx.reply(
-      "❌ Order cancelled. You can start again anytime with /start"
-    );
+    await ctx.reply("❌ Order cancelled. Start again anytime with /start");
+    await ctx.answerCbQuery();
   });
 }

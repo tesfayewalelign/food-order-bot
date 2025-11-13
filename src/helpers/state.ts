@@ -1,20 +1,31 @@
-export interface UserState {
-  step: string;
-  name?: string;
-  phone?: string;
-  campus?: string;
-  restaurant?: string;
-  food?: string;
-  count?: number;
-  cartFoods?: any[];
-}
+export type UserState = {
+  step:
+    | "ask_name"
+    | "ask_phone"
+    | "ask_campus"
+    | "ask_restaurant"
+    | "ask_name"
+    | "select_food"
+    | "waiting_for_quantity"
+    | "choose_delivery_type"
+    | "confirm_order";
+  foods: { name: string; quantity: number }[];
+  cartFoods: { name: string; quantity: number }[];
+  currentFood: string | undefined;
+  deliveryType: "new" | "contract" | undefined;
+  restaurant: string | undefined;
+  campus: string | undefined;
+  name: string | undefined;
+  phone: string | undefined;
+};
+
 export interface User {
   telegram_id: number;
   phone: string;
   name: string;
   campus: string;
   is_contract: boolean;
-  remaining_contract: number | null;
+  contract_count?: number;
 }
 
 export const userState = new Map<number, UserState>();
