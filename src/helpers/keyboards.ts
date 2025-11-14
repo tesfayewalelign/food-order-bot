@@ -42,20 +42,28 @@ export const campusKeyboard = Markup.inlineKeyboard([
 ]);
 
 export const restaurantKeyboard = Markup.inlineKeyboard([
-  [Markup.button.callback("🍽 Askuala", "restaurant_Askuala")],
-  [Markup.button.callback("🍽 Fike", "restaurant_Fike")],
-  [Markup.button.callback("🍽 Mesi", "restaurant_Mesi")],
-  [Markup.button.callback("🍽 Pepsi", "restaurant_Pepsi")],
-  [Markup.button.callback("🍽 Adonay", "restaurant_Adonay")],
-  [Markup.button.callback("🍽 Shewit", "restaurant_Shewit")],
-  [Markup.button.callback("🍽 AM", "restaurant_AM")],
-  [Markup.button.callback("🍽 Ahadu", "restaurant_Ahadu")],
+  [
+    Markup.button.callback("🍽 Askuala", "restaurant_Askuala"),
+    Markup.button.callback("🍽 Fike", "restaurant_Fike"),
+  ],
+  [
+    Markup.button.callback("🍽 Mesi", "restaurant_Mesi"),
+    Markup.button.callback("🍽 Pepsi", "restaurant_Pepsi"),
+  ],
+  [
+    Markup.button.callback("🍽 Adonay", "restaurant_Adonay"),
+    Markup.button.callback("🍽 Shewit", "restaurant_Shewit"),
+  ],
+  [
+    Markup.button.callback("🍽 AM", "restaurant_AM"),
+    Markup.button.callback("🍽 Ahadu", "restaurant_Ahadu"),
+  ],
   [Markup.button.callback("🍽 Selam", "restaurant_Selam")],
 ]);
 
 export const foodKeyboard = Markup.inlineKeyboard([
   [
-    Markup.button.callback("🍲 Yenet", "food_Yenet"),
+    Markup.button.callback("🍲 Beyaynet", "food_Yenet"),
     Markup.button.callback("🍲 Pasta be atkilit", "food_Pasta be atkilit"),
   ],
   [

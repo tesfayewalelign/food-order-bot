@@ -1,4 +1,4 @@
-import { Telegraf, Context } from "telegraf";
+import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../../config/supabase.js";
 import { userState, resetUserState, UserState } from "../../helpers/state.js";
 import {
@@ -12,9 +12,45 @@ import {
 
 let remainingContracts = 30;
 
+function isTextMessage(msg: any): msg is { text: string } {
+  return msg && typeof msg.text === "string";
+}
+
+function isContactMessage(
+  msg: any
+): msg is { contact: { phone_number: string } } {
+  return (
+    msg &&
+    typeof msg.contact === "object" &&
+    typeof msg.contact.phone_number === "string"
+  );
+}
+
 const getCallbackData = (ctx: Context): string | null => {
   const callbackQuery = ctx.callbackQuery as { data?: string } | undefined;
   return callbackQuery?.data ?? null;
+};
+
+const initUserState = async (
+  userId: number,
+  profile?: any
+): Promise<UserState> => {
+  let state = userState.get(userId);
+  if (!state) {
+    state = {
+      step: profile ? "profile_ask_campus" : "profile_ask_name",
+      foods: [],
+      cartFoods: [],
+      currentFood: undefined,
+      deliveryType: undefined,
+      restaurant: profile?.restaurant,
+      campus: profile?.campus,
+      name: profile?.name || "",
+      phone: profile?.phone || "",
+    };
+    userState.set(userId, state);
+  }
+  return state;
 };
 
 export function handleUserFlow(bot: Telegraf<Context>) {
@@ -28,154 +64,87 @@ export function handleUserFlow(bot: Telegraf<Context>) {
       .eq("telegram_id", userId)
       .single();
 
+    const state = await initUserState(userId, profile);
+
     if (profile) {
       await ctx.reply(
         `👋 Welcome back ${profile.name}!\nSelect an option below:`,
         getMainMenuKeyboard(false, false)
       );
-      return;
+    } else {
+      await ctx.reply("📋 Welcome! What's your full name?");
     }
-
-    userState.set(userId, {
-      step: "profile_ask_name",
-      foods: [],
-      cartFoods: [],
-      currentFood: undefined,
-      deliveryType: undefined,
-      restaurant: undefined,
-      campus: undefined,
-      name: "",
-      phone: "",
-    });
-
-    await ctx.reply("📋 Welcome new user! What's your full name?");
   });
 
-  bot.on("text", async (ctx) => {
+  bot.on("message", async (ctx) => {
     const userId = ctx.from?.id!;
-    const text = ctx.message?.text?.trim();
-    if (!text) return;
+    const state = userState.get(userId) || (await initUserState(userId));
 
-    let state: UserState | undefined = userState.get(userId);
+    const message = ctx.message;
 
-    if (!state) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("telegram_id", userId)
-        .single();
+    if (state.step === "profile_ask_name" && isTextMessage(message)) {
+      state.name = message.text;
+      state.step = "profile_ask_phone";
 
-      if (text === "🍔 Order Food") {
-        if (!profile) {
-          userState.set(userId, {
-            step: "profile_ask_name",
-            foods: [],
-            cartFoods: [],
-            currentFood: undefined,
-            deliveryType: undefined,
-            restaurant: undefined,
-            campus: undefined,
-            name: "",
-            phone: "",
-          });
-          await ctx.reply(
-            "📋 You need a profile first. What's your full name?"
-          );
-          return;
-        }
-
-        userState.set(userId, {
-          step: "select_food",
-          foods: [],
-          cartFoods: [],
-          currentFood: undefined,
-          deliveryType: undefined,
-          restaurant: undefined,
-          campus: profile.campus,
-          name: profile.name,
-          phone: profile.phone,
-        });
-
-        await ctx.reply(
-          `🍔 Welcome ${profile.name}! Choose your restaurant:`,
-          restaurantKeyboard
-        );
-        return;
-      }
-
-      if (text === "ℹ️ Help") {
-        await ctx.reply(
-          "📝 Help:\n1. 🍔 Order Food → Start a new order\n2. 📦 My Orders → Check past orders\n3. 🏠 Main Menu → Go back to main menu"
-        );
-        return;
-      }
-
-      if (text === "📦 My Orders") {
-        await ctx.reply("📂 You have no orders yet.");
-        return;
-      }
-
+      await ctx.reply(
+        "📞 Please share your phone number:",
+        Markup.keyboard([
+          Markup.button.contactRequest("Share Phone Number"),
+        ]).resize()
+      );
       return;
     }
 
-    switch (state.step) {
-      case "profile_ask_name":
-        state.name = text;
-        state.step = "profile_ask_phone";
-        await ctx.reply("📞 Enter your phone number:");
-        return;
+    if (state.step === "profile_ask_phone" && isContactMessage(message)) {
+      state.phone = message.contact.phone_number;
+      state.step = "profile_ask_campus";
 
-      case "profile_ask_phone":
-        state.phone = text;
-        state.step = "profile_ask_campus";
-        await ctx.reply("🏫 Enter your campus:");
-        return;
-
-      case "profile_ask_campus":
-        state.campus = text;
-        state.step = "profile_ask_dorm";
-        await ctx.reply("🏠 Enter your dorm:");
-        return;
-
-      case "profile_ask_dorm":
-        const dorm = text;
-
-        await supabase.from("profiles").upsert({
-          telegram_id: userId,
-          name: state.name,
-          phone: state.phone,
-          campus: state.campus,
-          dorm,
-        });
-
-        resetUserState(userId);
-
-        await ctx.reply(
-          `✅ Profile created! Welcome ${state.name}.\nSelect an option below:`,
-          getMainMenuKeyboard(false, false)
-        );
-        return;
+      await ctx.reply("🏫 Select your campus:", campusKeyboard);
+      return;
     }
 
-    switch (state.step) {
-      case "waiting_for_quantity":
-        const count = parseInt(text);
-        if (isNaN(count) || count <= 0) {
-          await ctx.reply("⚠️ Please enter a valid number (e.g., 1, 2, 3).");
+    if (state.step === "waiting_for_quantity" && isTextMessage(message)) {
+      const quantity = parseInt(message.text);
+      if (isNaN(quantity) || quantity <= 0) {
+        await ctx.reply("⚠️ Please enter a valid number.");
+        return;
+      }
+
+      state.foods.push({ name: state.currentFood!, quantity });
+      state.currentFood = undefined;
+      state.step = "select_food";
+
+      await ctx.reply(
+        "✅ Added to cart! Select another food or press ✅ Done when finished.",
+        foodKeyboard
+      );
+      return;
+    }
+
+    if (isTextMessage(message)) {
+      switch (message.text) {
+        case "🍔 Order Food":
+          state.step = "profile_ask_campus";
+          await ctx.reply(
+            "🍔 Let's start your order. Choose your campus:",
+            campusKeyboard
+          );
           return;
-        }
 
-        if (state.currentFood) {
-          state.foods.push({ name: state.currentFood, quantity: count });
-          state.currentFood = undefined;
-        }
+        case "ℹ️ Help":
+          await ctx.reply(
+            "📝 Help:\n1. 🍔 Order Food → Start a new order\n2. 📦 My Orders → Check past orders\n3. 🏠 Main Menu → Go back to main menu"
+          );
+          return;
 
-        state.step = "select_food";
-        await ctx.reply(
-          "🍔 You can now choose another food or press ✅ Done when finished:",
-          foodKeyboard
-        );
-        break;
+        case "📦 My Orders":
+          await ctx.reply("📂 You have no orders yet.");
+          return;
+
+        case "🏠 Main Menu":
+          await ctx.reply("🏠 Main Menu:", getMainMenuKeyboard(false, false));
+          return;
+      }
     }
   });
 
@@ -185,15 +154,31 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     if (!state) return;
 
     const match = getCallbackData(ctx)?.match(/^campus_(.+)$/);
-    if (!match || !match[1]) return;
+    if (!match || !match[1]) return; // <-- ensure match[1] exists
 
-    state!.campus = match[1].replace(/_/g, " ");
-    state!.step = "ask_restaurant";
+    state.campus = match[1].replace(/_/g, " ");
 
+    // Save new user to DB
+    if (state.step === "profile_ask_campus") {
+      await supabase.from("profiles").upsert(
+        [
+          {
+            telegram_id: userId,
+            name: state.name,
+            phone: state.phone,
+            campus: state.campus,
+          },
+        ],
+        { onConflict: "telegram_id" }
+      );
+    }
+
+    state.step = "ask_restaurant";
     await ctx.editMessageText("🍴 Choose your restaurant:", restaurantKeyboard);
     await ctx.answerCbQuery();
   });
 
+  // ---- Restaurant selection ----
   bot.action(/^restaurant_(.+)/, async (ctx) => {
     const userId = ctx.from?.id!;
     const state = userState.get(userId);
@@ -213,6 +198,7 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     await ctx.answerCbQuery();
   });
 
+  // ---- Food selection ----
   bot.action(/^food_(.+)/, async (ctx) => {
     const userId = ctx.from?.id!;
     const state = userState.get(userId);
@@ -233,7 +219,7 @@ export function handleUserFlow(bot: Telegraf<Context>) {
   bot.action("done_food", async (ctx) => {
     const userId = ctx.from?.id!;
     const state = userState.get(userId);
-    if (!state || !state.foods.length) {
+    if (!state || state.foods.length === 0) {
       await ctx.reply("⚠️ Please select at least one food before continuing.");
       return;
     }
@@ -260,9 +246,8 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const totalPrice = state.foods.reduce((acc, f) => acc + f.quantity * 50, 0);
 
     let contractInfo = "";
-    if (state.deliveryType === "contract") {
+    if (state.deliveryType === "contract")
       contractInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
-    }
 
     await ctx.reply(
       `🧾 *Final Order Summary*\n\n` +
@@ -287,16 +272,29 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    let contractInfo = "";
     if (state.deliveryType === "contract") {
+      if (remainingContracts <= 0) {
+        await ctx.reply(
+          "❌ Sorry, there are no remaining contract orders available at the moment."
+        );
+        resetUserState(userId);
+        await ctx.answerCbQuery();
+        return;
+      }
       remainingContracts--;
-      contractInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
     }
 
     const foodsList = state.foods
       .map((f) => `${f.name} x${f.quantity}`)
       .join(", ");
     const totalPrice = state.foods.reduce((acc, f) => acc + f.quantity * 50, 0);
+
+    let deliveryInfo = "";
+    if (state.deliveryType === "contract") {
+      deliveryInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
+    } else {
+      deliveryInfo = "💵 Pay on delivery";
+    }
 
     await ctx.reply(
       `✅ Order confirmed! Your delivery is being prepared.\n\n` +
@@ -306,15 +304,13 @@ export function handleUserFlow(bot: Telegraf<Context>) {
         `🏫 Campus: ${state.campus}\n` +
         `🍽 Restaurant: ${state.restaurant}\n` +
         `🍔 Foods: ${foodsList}\n` +
-        `🚚 Delivery Type: ${
-          state.deliveryType === "contract" ? "Contract" : "Pay"
-        }\n` +
-        `${contractInfo}\n` +
+        `🚚 ${deliveryInfo}\n` +
         `💰 Total: ${totalPrice} ETB`,
       { parse_mode: "Markdown" }
     );
 
     resetUserState(userId);
+    await ctx.answerCbQuery();
   });
 
   bot.action("cancel_order", async (ctx) => {
