@@ -13,16 +13,21 @@ export type UserState = {
     | "profile_ask_phone"
     | "profile_ask_campus"
     | "profile_ask_dorm"
+    | "rider_enter_code"
+    | "rider_menu"
+    | "rider_id"
     | undefined;
-  foods: { name: string; quantity: number }[];
-  cartFoods: { name: string; quantity: number }[];
-  currentFood: string | undefined;
+
   deliveryType: "new" | "contract" | undefined;
   restaurant: string | undefined;
   campus: string | undefined;
   name: string | undefined;
   phone: string | undefined;
   orderId?: number;
+  rider_id?: number;
+  foods: { name: string; quantity: number }[];
+  cartFoods: any[];
+  currentFood?: string;
 };
 
 export interface User {
@@ -32,6 +37,17 @@ export interface User {
   campus: string;
   is_contract: boolean;
   contract_count?: number;
+
+  restaurant?: string;
+  foods: { name: string; quantity: number }[];
+  cartFoods: any[];
+  currentFood?: string;
+
+  deliveryType?: "new" | "contract";
+
+  rider_id?: number;
+
+  orderId?: number;
 }
 
 export const userState = new Map<number, UserState>();
