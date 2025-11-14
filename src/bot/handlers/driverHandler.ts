@@ -1,54 +1,40 @@
 import { Telegraf, Context } from "telegraf";
 import { supabase } from "../../config/supabase.js";
+import { ADMIN_IDS } from "../bot.js";
 
 export function setupDriverHandler(bot: Telegraf, ADMIN_IDS: number[]) {
-  bot.command("add_rider", async (ctx: Context) => {
-    const userId = ctx.from?.id;
-    if (!ADMIN_IDS.includes(userId!)) {
-      return ctx.reply("🚫 You are not authorized to add riders.");
-    }
+  bot.action(/accept_order_(\d+)/, async (ctx) => {
+    const callback = ctx.callbackQuery;
+    if (!("data" in callback)) return;
 
-    if (!ctx.message || !("text" in ctx.message)) {
-      return ctx.reply("⚠️ Please use the command in text format.");
-    }
+    const orderId = Number(callback.data.replace("accept_order_", ""));
+    const riderId = ctx.from?.id!;
 
-    const text = ctx.message.text.trim();
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "accepted", assigned_rider: riderId })
+      .eq("id", orderId);
 
-    const match = text.match(/^\/add_rider\s+(\d+)\s+(\S+)\s+"([^"]+)"$/);
+    if (error) return ctx.reply("⚠️ Failed to accept order.");
 
-    if (!match) {
-      return ctx.reply(
-        `⚠️ Invalid format.\n\nExample:\n/add_rider 7289662736 Besukal "Techno Boys Dorm"`
-      );
-    }
+    await ctx.editMessageText("✅ Order accepted! Delivering...");
+  });
 
-    const [, phone, name, location] = match;
+  bot.action(/reject_order_(\d+)/, async (ctx) => {
+    const callback = ctx.callbackQuery;
+    if (!("data" in callback)) return;
 
-    try {
-      const { data, error } = await supabase
-        .from("riders")
-        .insert([
-          {
-            name,
-            phone,
-            location,
-            telegram_id: userId,
-            active: true,
-          },
-        ])
-        .select();
+    const orderId = Number(callback.data.replace("reject_order_", ""));
 
-      if (error) {
-        console.error(error);
-        return ctx.reply(`❌ Error adding rider: ${error.message}`);
-      }
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "rejected" })
+      .eq("id", orderId);
 
-      ctx.reply(
-        `✅ Rider added successfully!\n👤 Name: ${name}\n📞 Phone: ${phone}\n🏠 Location: ${location}`
-      );
-    } catch (err) {
-      console.error(err);
-      ctx.reply("⚠️ Something went wrong while adding rider.");
-    }
+    if (error) return ctx.reply("⚠️ Failed to reject order.");
+
+    await ctx.editMessageText(
+      "❌ You rejected the order (Admin will reassign)."
+    );
   });
 }

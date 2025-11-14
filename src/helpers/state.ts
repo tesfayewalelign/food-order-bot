@@ -22,6 +22,7 @@ export type UserState = {
   campus: string | undefined;
   name: string | undefined;
   phone: string | undefined;
+  orderId?: number;
 };
 
 export interface User {

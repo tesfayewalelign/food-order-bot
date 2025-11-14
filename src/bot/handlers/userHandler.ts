@@ -154,11 +154,10 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     if (!state) return;
 
     const match = getCallbackData(ctx)?.match(/^campus_(.+)$/);
-    if (!match || !match[1]) return; // <-- ensure match[1] exists
+    if (!match || !match[1]) return;
 
     state.campus = match[1].replace(/_/g, " ");
 
-    // Save new user to DB
     if (state.step === "profile_ask_campus") {
       await supabase.from("profiles").upsert(
         [
@@ -178,7 +177,6 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     await ctx.answerCbQuery();
   });
 
-  // ---- Restaurant selection ----
   bot.action(/^restaurant_(.+)/, async (ctx) => {
     const userId = ctx.from?.id!;
     const state = userState.get(userId);
@@ -198,7 +196,6 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     await ctx.answerCbQuery();
   });
 
-  // ---- Food selection ----
   bot.action(/^food_(.+)/, async (ctx) => {
     const userId = ctx.from?.id!;
     const state = userState.get(userId);
@@ -272,28 +269,34 @@ export function handleUserFlow(bot: Telegraf<Context>) {
     const state = userState.get(userId);
     if (!state) return;
 
-    if (state.deliveryType === "contract") {
-      if (remainingContracts <= 0) {
-        await ctx.reply(
-          "❌ Sorry, there are no remaining contract orders available at the moment."
-        );
-        resetUserState(userId);
-        await ctx.answerCbQuery();
-        return;
-      }
-      remainingContracts--;
-    }
+    if (state.deliveryType === "contract") remainingContracts--;
 
     const foodsList = state.foods
       .map((f) => `${f.name} x${f.quantity}`)
       .join(", ");
     const totalPrice = state.foods.reduce((acc, f) => acc + f.quantity * 50, 0);
 
-    let deliveryInfo = "";
-    if (state.deliveryType === "contract") {
-      deliveryInfo = `📦 Remaining Contract Orders: ${remainingContracts}`;
-    } else {
-      deliveryInfo = "💵 Pay on delivery";
+    const { data: newOrder, error } = await supabase
+      .from("orders")
+      .insert([
+        {
+          user_name: state.name,
+          phone: state.phone,
+          campus: state.campus,
+          restaurant: state.restaurant,
+          foods: foodsList,
+          total: totalPrice,
+          delivery_type: state.deliveryType,
+          remaining_contracts: remainingContracts,
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Order save error:", error);
+      await ctx.reply("⚠️ Something went wrong saving your order.");
+      return;
     }
 
     await ctx.reply(
@@ -304,13 +307,48 @@ export function handleUserFlow(bot: Telegraf<Context>) {
         `🏫 Campus: ${state.campus}\n` +
         `🍽 Restaurant: ${state.restaurant}\n` +
         `🍔 Foods: ${foodsList}\n` +
-        `🚚 ${deliveryInfo}\n` +
+        `🚚 Delivery Type: ${
+          state.deliveryType === "contract"
+            ? `📦 Remaining Contract Orders: ${remainingContracts}`
+            : "Pay on delivery"
+        }\n` +
         `💰 Total: ${totalPrice} ETB`,
       { parse_mode: "Markdown" }
     );
 
+    const { data: riders } = await supabase
+      .from("riders")
+      .select("telegram_id, name")
+      .eq("campus", state.campus)
+      .eq("active", true);
+
+    if (riders && riders.length > 0) {
+      for (const rider of riders) {
+        if (rider.telegram_id) {
+          await ctx.telegram.sendMessage(
+            rider.telegram_id,
+            `🆕 *New Order Received!*\n🍔 Restaurant: ${state.restaurant}\n👤 Customer: ${state.name}\n🏠 Campus: ${state.campus}\n📞 Phone: ${state.phone}\n💰 Total: ${totalPrice} ETB`,
+            {
+              parse_mode: "Markdown",
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    "✅ Accept",
+                    `accept_order_${newOrder.id}`
+                  ),
+                  Markup.button.callback(
+                    "❌ Reject",
+                    `reject_order_${newOrder.id}`
+                  ),
+                ],
+              ]),
+            }
+          );
+        }
+      }
+    }
+
     resetUserState(userId);
-    await ctx.answerCbQuery();
   });
 
   bot.action("cancel_order", async (ctx) => {
