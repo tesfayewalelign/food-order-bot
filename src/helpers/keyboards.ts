@@ -1,5 +1,8 @@
+// src/helpers/keyboards.ts
 import { Markup } from "telegraf";
+import { supabase } from "../config/supabase.js";
 
+// ---------------- MAIN MENU ----------------
 export function getMainMenuKeyboard(isAdmin: boolean, isDriver: boolean) {
   if (isAdmin) {
     return Markup.keyboard([
@@ -23,6 +26,7 @@ export function getMainMenuKeyboard(isAdmin: boolean, isDriver: boolean) {
   ]).resize();
 }
 
+// ---------------- CAMPUS ----------------
 export const campusKeyboard = Markup.inlineKeyboard([
   [
     Markup.button.callback(
@@ -41,56 +45,96 @@ export const campusKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("🏫 Techno Girls Dorm", "campus_techno_girls")],
 ]);
 
-export const restaurantKeyboard = Markup.inlineKeyboard([
-  [
-    Markup.button.callback("🍽 Askuala", "restaurant_Askuala"),
-    Markup.button.callback("🍽 Fike", "restaurant_Fike"),
-  ],
-  [
-    Markup.button.callback("🍽 Mesi", "restaurant_Mesi"),
-    Markup.button.callback("🍽 Pepsi", "restaurant_Pepsi"),
-  ],
-  [
-    Markup.button.callback("🍽 Adonay", "restaurant_Adonay"),
-    Markup.button.callback("🍽 Shewit", "restaurant_Shewit"),
-  ],
-  [
-    Markup.button.callback("🍽 AM", "restaurant_AM"),
-    Markup.button.callback("🍽 Ahadu", "restaurant_Ahadu"),
-  ],
-  [Markup.button.callback("🍽 Selam", "restaurant_Selam")],
+// ---------------- DELIVERY TYPE ----------------
+export const deliveryKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback("🆕 New", "delivery_new")],
+  [Markup.button.callback("📃 Contract", "delivery_contract")],
 ]);
 
-export const foodKeyboard = Markup.inlineKeyboard([
-  [
-    Markup.button.callback("🍲 Beyaynet", "food_Yenet"),
-    Markup.button.callback("🍲 Pasta be atkilit", "food_Pasta be atkilit"),
-  ],
-  [
-    Markup.button.callback("🍲 Pasta be sgo", "food_Pasta be sgo"),
-    Markup.button.callback("🍲 Dnch", "food_Dnch"),
-  ],
-  [
-    Markup.button.callback("🍲 Firfir", "food_Firfir"),
-    Markup.button.callback("🍲 Alcha firfir", "food_Alcha firfir"),
-  ],
-  [
-    Markup.button.callback("🍲 Timatim lebleb", "food_Timatim lebleb"),
-    Markup.button.callback("🍲 Timatim sils", "food_Timatim sils"),
-  ],
-  [
-    Markup.button.callback("🍲 Enkulal sils", "food_Enkulal sils"),
-    Markup.button.callback("🍲 Enkulal firfir", "food_Enkulal firfir"),
-  ],
-  [Markup.button.callback("✅ Done Selecting Foods", "done_food")],
-]);
-
+// ---------------- CONFIRM ORDER ----------------
 export const confirmKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("✅ Confirm Order", "confirm_order")],
   [Markup.button.callback("❌ Cancel", "cancel_order")],
 ]);
 
-export const deliveryKeyboard = Markup.inlineKeyboard([
-  [Markup.button.callback("🆕 New", "delivery_new")],
-  [Markup.button.callback("📃 Contract", "delivery_contract")],
-]);
+// ---------------- DYNAMIC RESTAURANT KEYBOARD ----------------
+export async function restaurantKeyboard() {
+  const { data: restaurants, error } = await supabase
+    .from("restaurants")
+    .select("*");
+
+  if (error || !restaurants || restaurants.length === 0) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback("No restaurants found", "none")],
+    ]);
+  }
+
+  // Create inline buttons in rows of 2
+  const buttons = [];
+  for (let i = 0; i < restaurants.length; i += 2) {
+    const row = [];
+    row.push(
+      Markup.button.callback(
+        `🍽 ${restaurants[i].name}`,
+        `restaurant_${restaurants[i].name}`
+      )
+    );
+    if (restaurants[i + 1])
+      row.push(
+        Markup.button.callback(
+          `🍽 ${restaurants[i + 1].name}`,
+          `restaurant_${restaurants[i + 1].name}`
+        )
+      );
+    buttons.push(row);
+  }
+
+  return Markup.inlineKeyboard(buttons);
+}
+
+// ---------------- DYNAMIC FOOD KEYBOARD ----------------
+export async function foodKeyboard(restaurantName: string) {
+  const { data: foods, error } = await supabase
+    .from("foods")
+    .select("*")
+    .eq("restaurant_id", await getRestaurantIdByName(restaurantName));
+
+  if (error || !foods || foods.length === 0) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback("No foods found", "none")],
+    ]);
+  }
+
+  const buttons = [];
+  for (let i = 0; i < foods.length; i += 2) {
+    const row = [];
+    row.push(
+      Markup.button.callback(`🍲 ${foods[i].name}`, `food_${foods[i].name}`)
+    );
+    if (foods[i + 1])
+      row.push(
+        Markup.button.callback(
+          `🍲 ${foods[i + 1].name}`,
+          `food_${foods[i + 1].name}`
+        )
+      );
+    buttons.push(row);
+  }
+
+  // Add Done button at the end
+  buttons.push([
+    Markup.button.callback("✅ Done Selecting Foods", "done_food"),
+  ]);
+  return Markup.inlineKeyboard(buttons);
+}
+
+// ---------------- HELPER ----------------
+async function getRestaurantIdByName(name: string) {
+  const { data, error } = await supabase
+    .from("restaurants")
+    .select("id")
+    .eq("name", name)
+    .single();
+  if (error || !data) return null;
+  return data.id;
+}

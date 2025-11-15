@@ -1,8 +1,6 @@
-// src/bot/handlers/driverHandler.ts
-import { Telegraf, Context, Markup } from "telegraf";
+import { Telegraf, Context } from "telegraf";
 import { supabase } from "../../config/supabase.js";
 
-// Type guard for text messages
 function isTextMessage(
   ctx: Context
 ): ctx is Context & { message: { text: string } } {
@@ -13,115 +11,125 @@ function isTextMessage(
   );
 }
 
-export function setupDriverHandler(
-  bot: Telegraf<Context>,
-  ADMIN_IDS: number[]
-) {
-  // ==================== Start / Activate Rider ====================
-  bot.start(async (ctx) => {
-    await ctx.reply(
-      "👋 Welcome Rider!\nPlease enter your secret code to activate your account:"
-    );
-  });
-
-  bot.on("text", async (ctx) => {
+export function setupDriverHandler(bot: Telegraf<Context>) {
+  bot.command("activate", async (ctx) => {
     if (!isTextMessage(ctx)) return;
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
 
-    const enteredCode = ctx.message.text.trim();
+    const match = ctx.message.text.trim().match(/^\/activate\s+(\d{4})$/);
+    if (!match) return ctx.reply("⚠️ Please use: /activate <4-digit-code>");
 
+    const secret_code = match[1];
     const { data: rider, error } = await supabase
       .from("riders")
       .select("*")
-      .eq("secret_code", enteredCode)
+      .eq("secret_code", secret_code)
       .single();
 
-    if (error || !rider) {
-      return ctx.reply("❌ Invalid code. Please check with your admin.");
-    }
+    if (error || !rider) return ctx.reply("❌ Invalid secret code.");
 
-    // Update rider's Telegram ID
     await supabase
       .from("riders")
-      .update({ telegram_id: telegramId })
+      .update({ telegram_id: ctx.from?.id })
       .eq("id", rider.id);
 
+    await ctx.reply(`✅ Rider activated! Welcome ${rider.name}`);
+  });
+
+  async function sendPendingOrders(ctx: Context & { from: { id: number } }) {
+    const riderId = ctx.from.id;
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("telegram_id", riderId)
+      .single();
+
+    if (!rider)
+      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
+
+    const { data: orders } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("campus", rider.campus)
+      .eq("status", "pending")
+      .order("id");
+
+    if (!orders || orders.length === 0)
+      return ctx.reply("📭 No new orders available.");
+
+    let text = "📦 Pending Orders:\n";
+    for (const o of orders) {
+      text += `\nID: ${o.id} | User: ${o.user_name} | Phone: ${o.phone} | Foods: ${o.foods}`;
+      text += `\n/accept ${o.id} - Accept | /reject ${o.id} - Reject\n`;
+    }
+
+    await ctx.reply(text);
+  }
+
+  bot.command("my_orders", sendPendingOrders);
+
+  bot.command("accept", async (ctx) => {
+    if (!isTextMessage(ctx) || !ctx.from?.id) return;
+
+    const match = ctx.message.text.trim().match(/^\/accept\s+(\d+)$/);
+    if (!match) return ctx.reply("⚠️ Use: /accept <order-id>");
+
+    const orderId = Number(match[1]);
+    const riderId = ctx.from.id;
+
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("telegram_id", riderId)
+      .single();
+
+    if (!rider)
+      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "Accepted", rider_id: rider.id })
+      .eq("id", orderId);
+
+    if (error) return ctx.reply("❌ Failed to accept order.");
+
+    await ctx.reply(`✅ Order #${orderId} accepted!`);
+  });
+
+  bot.command("reject", async (ctx) => {
+    if (!isTextMessage(ctx) || !ctx.from?.id) return;
+
+    const match = ctx.message.text.trim().match(/^\/reject\s+(\d+)$/);
+    if (!match) return ctx.reply("⚠️ Use: /reject <order-id>");
+
+    const orderId = Number(match[1]);
+    const riderId = ctx.from.id;
+
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("telegram_id", riderId)
+      .single();
+
+    if (!rider)
+      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "Rejected" })
+      .eq("id", orderId);
+
+    if (error) return ctx.reply("❌ Failed to reject order.");
+
+    await ctx.reply(`❌ Order #${orderId} rejected.`);
+  });
+
+  bot.command("rider_help", async (ctx) => {
     await ctx.reply(
-      `✅ Account activated!\n👤 Name: ${rider.name}\n🏠 Campus: ${rider.campus}\n` +
-        "You can now accept and deliver orders."
+      `🛵 Rider Commands:
+/activate <4-digit-code> - Activate yourself
+/my_orders - View orders for your campus
+/accept <order-id> - Accept an order
+/reject <order-id> - Reject an order`
     );
-  });
-
-  // ==================== Accept Order ====================
-  bot.action(/^accept_order_(\d+)$/, async (ctx: Context & any) => {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", telegramId)
-      .single();
-
-    if (!rider) return ctx.reply("⚠️ You are not registered as a rider.");
-
-    const orderId = Number(ctx.update.callback_query.data.split("_")[2]);
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "accepted", assigned_rider: telegramId })
-      .eq("id", orderId);
-
-    if (error) return ctx.reply("⚠️ Failed to accept order.");
-
-    await ctx.editMessageText(
-      "✅ You accepted this order. Preparing delivery..."
-    );
-
-    // Notify admins
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `🚴 Rider @${
-          ctx.from.username || ctx.from.first_name
-        } accepted order #${orderId}.`
-      );
-    }
-  });
-
-  // ==================== Reject Order ====================
-  bot.action(/^reject_order_(\d+)$/, async (ctx: Context & any) => {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", telegramId)
-      .single();
-
-    if (!rider) return ctx.reply("⚠️ You are not registered as a rider.");
-
-    const orderId = Number(ctx.update.callback_query.data.split("_")[2]);
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", orderId);
-
-    if (error) return ctx.reply("⚠️ Failed to reject order.");
-
-    await ctx.editMessageText(
-      "❌ You rejected this order. Admin will reassign it."
-    );
-
-    // Notify admins
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `⚠️ Order #${orderId} was rejected by rider @${
-          ctx.from.username || ctx.from.first_name
-        }. Needs reassignment.`
-      );
-    }
   });
 }
