@@ -1,57 +1,33 @@
-export type UserState = {
-  step?:
-    | "ask_name"
-    | "ask_phone"
-    | "ask_campus"
-    | "ask_restaurant"
-    | "ask_name"
-    | "select_food"
-    | "waiting_for_quantity"
-    | "choose_delivery_type"
-    | "confirm_order"
+export interface FoodItem {
+  name: string;
+  quantity: number;
+  price: number;
+}
+
+export interface UserState {
+  step:
     | "profile_ask_name"
     | "profile_ask_phone"
     | "profile_ask_campus"
-    | "profile_ask_dorm"
-    | "rider_enter_code"
-    | "rider_menu"
-    | "rider_id"
-    | undefined;
-
-  deliveryType: "new" | "contract" | undefined;
-  restaurant: string | undefined;
-  campus: string | undefined;
-  name: string | undefined;
-  phone: string | undefined;
-  orderId?: number;
-  rider_id?: number;
-  foods: { name: string; quantity: number }[];
-  cartFoods: any[];
+    | "ask_restaurant"
+    | "select_food"
+    | "waiting_for_quantity"
+    | "choose_delivery_type"
+    | "confirm_order";
+  foods: FoodItem[];
   currentFood?: string;
-};
-
-export interface User {
-  telegram_id: number;
-  phone: string;
-  name: string;
-  campus: string;
-  is_contract: boolean;
-  contract_count?: number;
-
-  restaurant?: string;
-  foods: { name: string; quantity: number }[];
-  cartFoods: any[];
-  currentFood?: string;
-
+  currentFoodPrice?: number;
   deliveryType?: "new" | "contract";
-
-  rider_id?: number;
-
-  orderId?: number;
+  restaurant: string;
+  campus: string;
+  name: string;
+  phone: string;
+  cartFoods: [];
+  restaurantId?: number;
 }
 
 export const userState = new Map<number, UserState>();
 
-export function resetUserState(userId: number) {
+export const resetUserState = (userId: number) => {
   userState.delete(userId);
-}
+};

@@ -18,25 +18,27 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     const match = ctx.message.text.trim().match(/^\/activate\s+(\d{4})$/);
     if (!match) return ctx.reply("⚠️ Please use: /activate <4-digit-code>");
 
-    const secret_code = match[1];
-    const { data: rider, error } = await supabase
+    const code = match[1];
+
+    const { data: rider } = await supabase
       .from("riders")
       .select("*")
-      .eq("secret_code", secret_code)
+      .eq("secret_code", code)
       .single();
 
-    if (error || !rider) return ctx.reply("❌ Invalid secret code.");
+    if (!rider) return ctx.reply("❌ Invalid secret code.");
 
     await supabase
       .from("riders")
       .update({ telegram_id: ctx.from?.id })
       .eq("id", rider.id);
 
-    await ctx.reply(`✅ Rider activated! Welcome ${rider.name}`);
+    ctx.reply(`✅ Rider activated! Welcome ${rider.name}`);
   });
 
   async function sendPendingOrders(ctx: Context & { from: { id: number } }) {
     const riderId = ctx.from.id;
+
     const { data: rider } = await supabase
       .from("riders")
       .select("*")
@@ -57,12 +59,13 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       return ctx.reply("📭 No new orders available.");
 
     let text = "📦 Pending Orders:\n";
+
     for (const o of orders) {
       text += `\nID: ${o.id} | User: ${o.user_name} | Phone: ${o.phone} | Foods: ${o.foods}`;
       text += `\n/accept ${o.id} - Accept | /reject ${o.id} - Reject\n`;
     }
 
-    await ctx.reply(text);
+    ctx.reply(text);
   }
 
   bot.command("my_orders", sendPendingOrders);
@@ -92,7 +95,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     if (error) return ctx.reply("❌ Failed to accept order.");
 
-    await ctx.reply(`✅ Order #${orderId} accepted!`);
+    ctx.reply(`✅ Order #${orderId} accepted!`);
   });
 
   bot.command("reject", async (ctx) => {
@@ -120,16 +123,16 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     if (error) return ctx.reply("❌ Failed to reject order.");
 
-    await ctx.reply(`❌ Order #${orderId} rejected.`);
+    ctx.reply(`❌ Order #${orderId} rejected.`);
   });
 
-  bot.command("rider_help", async (ctx) => {
-    await ctx.reply(
+  bot.command("rider_help", (ctx) => {
+    ctx.reply(
       `🛵 Rider Commands:
-/activate <4-digit-code> - Activate yourself
-/my_orders - View orders for your campus
-/accept <order-id> - Accept an order
-/reject <order-id> - Reject an order`
+/activate <4-digit-code>
+/my_orders
+/accept <order-id>
+/reject <order-id>`
     );
   });
 }
