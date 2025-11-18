@@ -23,7 +23,8 @@ export interface UserState {
   name: string;
   phone: string;
   cartFoods: [];
-  restaurantId?: number;
+  restaurantId?: string;
+  username?: string;
 }
 
 export const userState = new Map<number, UserState>();

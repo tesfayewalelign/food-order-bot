@@ -20,14 +20,20 @@ function isContactMessage(
 const getCallbackData = (ctx: Context) =>
   (ctx.callbackQuery as { data?: string } | undefined)?.data ?? null;
 
-async function getUserContract(userId: number) {
-  const { data, error } = await supabase
-    .from("user_contracts")
+export async function getUserContract(userId: number) {
+  const { data: contract, error } = await supabase
+    .from("contracts")
     .select("*")
-    .eq("telegram_id", userId)
+    .eq("user_id", userId)
+    .eq("is_active", true)
     .maybeSingle();
-  if (error) console.error("[DB] getUserContract error:", error.message);
-  return data;
+
+  if (error) {
+    console.error("Contract fetch error:", error);
+    return null;
+  }
+
+  return contract || null;
 }
 
 const initUserState = async (userId: number, profile?: any) => {
@@ -61,18 +67,19 @@ export function handleUserFlow(
     if (!userId) return;
 
     try {
-      await ctx.reply("Initializing bot...");
-
+      // --- Admin ---
       if (ADMIN_IDS.includes(userId)) {
         const keyboard = getMainMenuKeyboard(true, false);
         return ctx.reply(`👋 Welcome Admin ${ctx.from?.first_name}!`, keyboard);
       }
 
+      // --- Rider ---
       if (DRIVER_IDS.includes(userId)) {
         const keyboard = getMainMenuKeyboard(false, true);
         return ctx.reply(`🛵 Welcome Rider ${ctx.from?.first_name}!`, keyboard);
       }
 
+      // --- Normal User ---
       resetUserState(userId);
 
       const { data: profile } = await supabase
@@ -83,15 +90,13 @@ export function handleUserFlow(
 
       const state = await initUserState(userId, profile);
 
-      if (profile) {
-        return ctx.reply(
-          `👋 Welcome back ${profile.name}!`,
-          getMainMenuKeyboard(false, false)
-        );
-      }
+      const welcomeMessage = profile
+        ? `👋 Welcome back ${profile.name}!\n\n🍽️ Campus Food Delivery - Hawassa University!\nWe bring delicious meals from nearby restaurants straight to your campus.\n\n✅ Fast & reliable delivery\n✅ Affordable prices for students\n✅ Fresh and hygienic food\n\nUse /order to start your meal or /help for assistance.`
+        : `👋 Welcome to Hawassa University Campus Food Delivery!\n\n🍽️ Get fresh meals delivered straight to your campus gate.\n✅ Fast delivery in just minutes\n✅ Affordable student-friendly prices\n✅ Wide selection of tasty meals from local restaurants\n\nPlease share your full name and phone number to get started.`;
 
-      return ctx.reply("📋 Welcome! What's your full name?");
-    } catch {
+      return ctx.reply(welcomeMessage, getMainMenuKeyboard(false, false));
+    } catch (err) {
+      console.error("Start command error:", err);
       try {
         await ctx.reply(
           "⚠️ An error occurred during initialization. Please try again later."
@@ -136,10 +141,9 @@ export function handleUserFlow(
       });
       state.currentFood = undefined;
       state.currentFoodPrice = undefined;
-      state.step = "select_food";
 
       if (!state.restaurantId) return ctx.reply("⚠️ No restaurant selected.");
-      const keyboard = await getFoodKeyboard(Number(state.restaurantId));
+      const keyboard = await getFoodKeyboard(state.restaurantId);
       return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
         reply_markup: keyboard?.reply_markup,
       });
@@ -213,16 +217,17 @@ export function handleUserFlow(
         show_alert: true,
       });
 
-    const restaurantId = Number(data.replace("restaurant_", ""));
+    const restaurantId = data.replace("restaurant_", "");
     state.restaurantId = restaurantId;
 
     const { data: restaurant, error } = await supabase
       .from("restaurants")
-      .select("id,name")
+      .select("id, name")
       .eq("id", restaurantId)
       .maybeSingle();
 
     if (error || !restaurant) {
+      console.error("Restaurant lookup failed:", error);
       return ctx.answerCbQuery("⚠️ Restaurant not found", { show_alert: true });
     }
 
@@ -237,9 +242,10 @@ export function handleUserFlow(
       );
 
     await ctx.editMessageText(
-      `🍔 Select foods from *${restaurant.name}*.\nPress ✅ Done when finished:`,
+      `🍔 *Select foods from ${restaurant.name}*\nPlease choose your items below. Press ✅ Done when finished.`,
       { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
     );
+
     return ctx.answerCbQuery();
   });
 
@@ -253,8 +259,7 @@ export function handleUserFlow(
       return ctx.answerCbQuery("⚠️ Session expired. /start", {
         show_alert: true,
       });
-
-    const foodId = Number(data.replace("food_", ""));
+    const foodId = data.replace("food_", "");
     const { data: food, error } = await supabase
       .from("foods")
       .select("*")
@@ -273,29 +278,86 @@ export function handleUserFlow(
     });
     return ctx.answerCbQuery();
   });
-
   bot.action("done_food", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
-    if (!state || state.foods.length === 0)
+
+    if (!state || state.foods.length === 0) {
       return ctx.answerCbQuery("⚠️ Select at least one food.", {
         show_alert: true,
       });
+    }
 
     state.step = "choose_delivery_type";
-
     const contract = await getUserContract(userId);
-    const keyboard = Markup.inlineKeyboard(
-      [
-        [Markup.button.callback("💵 Pay on Delivery", "delivery_new")],
-        contract && contract.is_active && contract.remaining_orders > 0
-          ? [Markup.button.callback("📦 Use Contract", "delivery_contract")]
-          : [],
-      ].filter((row) => row.length > 0)
-    );
 
-    await ctx.editMessageText("🚚 Choose delivery type:", keyboard);
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("💵 Pay on Delivery", "delivery_new")],
+      ...(contract && contract.is_active && contract.remaining_orders > 0
+        ? [[Markup.button.callback("📦 Use Contract", "delivery_contract")]]
+        : contract
+        ? []
+        : [
+            [Markup.button.callback("📥 Request Contract", "request_contract")],
+          ]),
+    ]);
+
+    await ctx.editMessageText("🚚 Choose delivery type:", {
+      reply_markup: keyboard.reply_markup,
+    });
+
     return ctx.answerCbQuery();
+  });
+
+  bot.action("request_contract", async (ctx) => {
+    const user = ctx.from!;
+    const userId = user.id;
+
+    const { data: profiles } = await supabase
+      .from("users")
+      .select("full_name, phone")
+      .eq("telegram_id", userId)
+      .maybeSingle();
+
+    const fullName =
+      profiles?.full_name ||
+      `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim();
+    const phone = profiles?.phone || "Not Provided";
+
+    await supabase.from("contract_requests").insert({
+      user_id: userId,
+      username: user.username || null,
+      full_name: fullName,
+      phone: phone,
+      status: "pending",
+    });
+
+    for (const adminId of ADMIN_IDS) {
+      await ctx.telegram.sendMessage(
+        adminId,
+        `📥 *New Contract Request*\n\n` +
+          `👤 *Name:* ${fullName}\n` +
+          `📱 *Phone:* ${phone}\n` +
+          `🔗 *Username:* @${user.username}\n` +
+          `🆔 *Telegram ID:* ${userId}\n\n` +
+          `Approve or reject:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "✔ Approve", callback_data: `c_approve_${userId}` },
+                { text: "❌ Reject", callback_data: `c_reject_${userId}` },
+              ],
+            ],
+          },
+        }
+      );
+    }
+
+    return ctx.reply(
+      "📨 Your contract request has been sent to the admin for approval."
+    );
   });
 
   bot.action(/^delivery_(.+)/, async (ctx) => {
@@ -353,17 +415,16 @@ export function handleUserFlow(
     );
     return ctx.answerCbQuery();
   });
-
   bot.action("confirm_order", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
-    if (!state)
+
+    if (!state) {
       return ctx.answerCbQuery(
         "⚠️ Session expired. Please restart with /start.",
-        {
-          show_alert: true,
-        }
+        { show_alert: true }
       );
+    }
 
     const deliveryFee = state.deliveryType === "new" ? 10 : 0;
     const subtotal = state.foods.reduce(
@@ -378,18 +439,37 @@ export function handleUserFlow(
     try {
       if (state.deliveryType === "contract") {
         const contract = await getUserContract(userId);
-        if (!contract || contract.remaining_orders <= 0)
-          return ctx.answerCbQuery("⚠️ Contract orders exhausted.", {
-            show_alert: true,
-          });
 
+        if (!contract) {
+          return ctx.answerCbQuery(
+            "⚠️ You don’t have an active contract. Please request a contract or pay per order.",
+            { show_alert: true }
+          );
+        }
+
+        if (!contract.is_active || contract.remaining_orders <= 0) {
+          return ctx.answerCbQuery(
+            "⚠️ Your contract orders are exhausted. Contact admin to reactivate.",
+            { show_alert: true }
+          );
+        }
+
+        const newRemaining = contract.remaining_orders - 1;
         await supabase
-          .from("user_contracts")
-          .update({
-            remaining_orders: contract.remaining_orders - 1,
-            updated_at: new Date(),
-          })
-          .eq("telegram_id", userId);
+          .from("contracts")
+          .update({ remaining_orders: newRemaining })
+          .eq("id", contract.id);
+
+        if (newRemaining === 0) {
+          for (const adminId of ADMIN_IDS) {
+            await ctx.telegram.sendMessage(
+              adminId,
+              `⚠️ Contract for @${state.username || ""} (${
+                state.name
+              }) has reached 0 remaining orders. Reactivation needed.`
+            );
+          }
+        }
       }
 
       await supabase.from("orders").insert([
@@ -402,32 +482,49 @@ export function handleUserFlow(
           total: totalPrice,
           delivery_type: state.deliveryType,
           telegram_id: userId,
+          status: "pending",
         },
       ]);
 
+      const campusNormalized = state.campus
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
       const { data: riders } = await supabase
         .from("riders")
-        .select("telegram_id")
-        .eq("campus", state.campus)
+        .select("telegram_id, campus")
         .eq("active", true);
 
-      if (riders?.length) {
-        for (const r of riders) {
-          if (r.telegram_id)
+      const campusRiders = riders?.filter(
+        (r) =>
+          r.campus.toLowerCase().replace(/\s+/g, " ").trim() ===
+          campusNormalized
+      );
+
+      if (campusRiders?.length) {
+        for (const r of campusRiders) {
+          if (r.telegram_id) {
             await ctx.telegram.sendMessage(
               r.telegram_id,
-              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞 ${state.phone}\n💰 Total: ${totalPrice} ETB`,
+              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞 ${state.phone}\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}`,
               { parse_mode: "Markdown" }
             );
+          }
         }
+      } else {
+        console.warn(`No active riders found for campus: ${state.campus}`);
       }
 
       resetUserState(userId);
+
       await ctx.editMessageText(
         "✅ Order placed successfully! The restaurant is preparing your food. You will be notified when a rider picks it up."
       );
+
       return ctx.answerCbQuery();
-    } catch {
+    } catch (err) {
+      console.error("Confirm order error:", err);
       return ctx.answerCbQuery(
         "❌ Order failed due to a database error. Please try again.",
         { show_alert: true }

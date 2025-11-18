@@ -366,4 +366,48 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       adminStates.delete(adminId);
     }
   });
+  bot.action(/^c_(approve|reject)_(\d+)$/, async (ctx) => {
+    const query = ctx.callbackQuery;
+
+    // Ensure callbackQuery exists and has data
+    if (!query || !("data" in query) || !query.data) return ctx.answerCbQuery();
+
+    const match = query.data.match(/^c_(approve|reject)_(\d+)$/);
+    if (!match) return ctx.answerCbQuery();
+
+    const [_, action, userIdStr] = match;
+    const userId = Number(userIdStr);
+
+    if (action === "approve") {
+      await supabase.from("contracts").insert({
+        user_id: userId,
+        is_active: true,
+        remaining_orders: 5,
+      });
+
+      await supabase
+        .from("contract_requests")
+        .update({ status: "approved" })
+        .eq("user_id", userId);
+
+      await ctx.telegram.sendMessage(
+        userId,
+        "✅ Your contract has been approved! You can now use Contract Delivery option."
+      );
+      await ctx.editMessageText("✔ Contract approved.");
+    } else {
+      await supabase
+        .from("contract_requests")
+        .update({ status: "rejected" })
+        .eq("user_id", userId);
+
+      await ctx.telegram.sendMessage(
+        userId,
+        "❌ Your contract request was rejected."
+      );
+      await ctx.editMessageText("❌ Contract rejected.");
+    }
+
+    return ctx.answerCbQuery();
+  });
 }

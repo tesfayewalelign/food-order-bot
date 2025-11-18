@@ -60,26 +60,26 @@ export async function getRestaurantKeyboard() {
       .select("id, name")
       .order("id");
 
-    if (error) {
-      console.error("[Restaurant Keyboard] Supabase error:", error.message);
+    if (error || !restaurants || restaurants.length === 0) {
       return Markup.inlineKeyboard([
         [Markup.button.callback("ℹ️ No restaurants available", "none")],
       ]);
     }
 
-    if (!restaurants || restaurants.length === 0) {
-      return Markup.inlineKeyboard([
-        [Markup.button.callback("ℹ️ No restaurants available", "none")],
-      ]);
-    }
+    // Remove duplicates based on ID
+    const uniqueRestaurants = Array.from(
+      new Map(restaurants.map((r) => [r.id, r])).values()
+    );
 
-    const buttons = [];
-    for (let i = 0; i < restaurants.length; i += 2) {
-      const r1 = restaurants[i];
-      const r2 = restaurants[i + 1];
-      if (!r1) continue;
-      const row = [Markup.button.callback(r1.name, `restaurant_${r1.id}`)];
-      if (r2) row.push(Markup.button.callback(r2.name, `restaurant_${r2.id}`));
+    const buttons: any[] = [];
+    const columns = 3; // 3 buttons per row
+
+    for (let i = 0; i < uniqueRestaurants.length; i += columns) {
+      const row: any[] = [];
+      for (let j = 0; j < columns; j++) {
+        const r = uniqueRestaurants[i + j];
+        if (r) row.push(Markup.button.callback(r.name, `restaurant_${r.id}`));
+      }
       buttons.push(row);
     }
 
@@ -92,25 +92,57 @@ export async function getRestaurantKeyboard() {
   }
 }
 
-export async function getFoodKeyboard(restaurantId: number) {
-  const { data: foods, error } = await supabase
-    .from("foods")
-    .select("id, name, price")
-    .eq("restaurant_id", restaurantId)
-    .order("name");
+export async function getFoodKeyboard(restaurantId: string) {
+  try {
+    const { data: foods, error } = await supabase
+      .from("foods")
+      .select("id, name, price")
+      .eq("restaurant_id", restaurantId)
+      .order("name");
 
-  if (error || !foods || foods.length === 0) {
+    if (error || !foods || foods.length === 0) {
+      return Markup.inlineKeyboard([
+        [Markup.button.callback("ℹ️ No foods available", "none")],
+      ]);
+    }
+
+    // Remove duplicates
+    const uniqueFoods = Array.from(
+      new Map(foods.map((f) => [f.id, f])).values()
+    );
+
+    const buttons: any[] = [];
+    for (let i = 0; i < uniqueFoods.length; i += 2) {
+      const f1 = uniqueFoods[i];
+      const f2 = uniqueFoods[i + 1];
+
+      if (!f1) continue; // skip undefined
+      const row = [
+        Markup.button.callback(`${f1.name} (${f1.price} ETB)`, `food_${f1.id}`),
+      ];
+
+      if (f2)
+        row.push(
+          Markup.button.callback(
+            `${f2.name} (${f2.price} ETB)`,
+            `food_${f2.id}`
+          )
+        );
+
+      buttons.push(row);
+    }
+
+    buttons.push([
+      Markup.button.callback("✅ Done Selecting Foods", "done_food"),
+    ]);
+
+    return Markup.inlineKeyboard(buttons);
+  } catch (err) {
+    console.error("[Food Keyboard] Unexpected error:", err);
     return Markup.inlineKeyboard([
       [Markup.button.callback("ℹ️ No foods available", "none")],
     ]);
   }
-
-  const rows = foods.map((f) => [
-    Markup.button.callback(`${f.name} (${f.price} ETB)`, `food_${f.id}`),
-  ]);
-
-  rows.push([Markup.button.callback("✅ Done Selecting Foods", "done_food")]);
-  return Markup.inlineKeyboard(rows);
 }
 
 export async function getUserFoodKeyboard(restaurantId: string) {

@@ -1,4 +1,4 @@
-import { Telegraf, Context } from "telegraf";
+import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../../config/supabase.js";
 
 function isTextMessage(
@@ -11,7 +11,29 @@ function isTextMessage(
   );
 }
 
-export function setupDriverHandler(bot: Telegraf<Context>) {
+export function setupDriverHandler(
+  bot: Telegraf<Context>,
+  DRIVER_IDS: number[]
+) {
+  bot.start(async (ctx, next) => {
+    const userId = ctx.from?.id;
+
+    // If the user is NOT a driver → continue to user flow
+    if (!userId || !DRIVER_IDS.includes(userId)) {
+      return next();
+    }
+
+    console.log("[DRIVER] /start from driver:", userId);
+
+    return ctx.reply(
+      "🚗 Welcome Driver!\nChoose an option:",
+      Markup.keyboard([
+        ["📦 My Deliveries"],
+        ["📅 Schedule"],
+        ["🏠 Main Menu"],
+      ]).resize()
+    );
+  });
   bot.command("activate", async (ctx) => {
     if (!isTextMessage(ctx)) return;
 
