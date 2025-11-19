@@ -1,10 +1,10 @@
-// src/bot/bot.ts
 import dotenv from "dotenv";
 import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../config/supabase.js";
 import { setupAdminHandler } from "./handlers/adminHandler.js";
 import { setupDriverHandler } from "./handlers/driverHandler.js";
 import { handleUserFlow } from "./handlers/userHandler.js";
+import { setupStartHandler } from "./handlers/startHandler.js";
 
 dotenv.config();
 
@@ -32,16 +32,16 @@ async function initBot() {
 
   console.log("Admin IDs:", ADMIN_IDS);
   console.log("Driver IDs:", DRIVER_IDS);
+  handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS); // handleUserFlow
+  setupStartHandler(bot, ADMIN_IDS, DRIVER_IDS);
 
-  // ----- Setup Handlers -----
-  handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS);
   setupAdminHandler(bot, ADMIN_IDS);
+
   setupDriverHandler(bot, DRIVER_IDS);
 
   console.log("[BOT] Bot initialized successfully.");
 }
 
-// ----- Graceful Stop -----
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 

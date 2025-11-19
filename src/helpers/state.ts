@@ -6,6 +6,7 @@ export interface FoodItem {
 
 export interface UserState {
   step:
+    | "idle"
     | "profile_ask_name"
     | "profile_ask_phone"
     | "profile_ask_campus"
@@ -14,21 +15,53 @@ export interface UserState {
     | "waiting_for_quantity"
     | "choose_delivery_type"
     | "confirm_order";
+
   foods: FoodItem[];
+
   currentFood?: string;
   currentFoodPrice?: number;
+
   deliveryType?: "new" | "contract";
-  restaurant: string;
-  campus: string;
-  name: string;
-  phone: string;
-  cartFoods: [];
-  restaurantId?: string;
+
+  restaurant?: string;
+  campus?: string;
+  name?: string;
+  phone?: string;
   username?: string;
+
+  cartFoods: any[];
+
+  restaurantId?: string;
 }
 
 export const userState = new Map<number, UserState>();
 
 export const resetUserState = (userId: number) => {
-  userState.delete(userId);
+  userState.set(userId, {
+    step: "idle",
+    foods: [],
+    cartFoods: [],
+  });
 };
+
+export async function initUserState(userId: number, profile: any | null) {
+  const state: UserState = {
+    step: profile ? "idle" : "profile_ask_name",
+
+    name: profile?.name,
+    phone: profile?.phone,
+    campus: profile?.campus,
+
+    foods: [],
+    cartFoods: [],
+
+    restaurant: undefined,
+    restaurantId: undefined,
+    currentFood: undefined,
+    currentFoodPrice: undefined,
+    deliveryType: undefined,
+  };
+
+  userState.set(userId, state);
+  return state;
+}

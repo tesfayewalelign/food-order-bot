@@ -40,7 +40,7 @@ const initUserState = async (userId: number, profile?: any) => {
   let state = userState.get(userId);
   if (!state) {
     state = {
-      step: profile ? "ask_restaurant" : "profile_ask_name",
+      step: profile ? "idle" : "profile_ask_name",
       foods: [],
       cartFoods: [],
       currentFood: undefined,
@@ -60,58 +60,38 @@ const initUserState = async (userId: number, profile?: any) => {
 export function handleUserFlow(
   bot: Telegraf<Context>,
   ADMIN_IDS: number[],
-  DRIVER_IDS: number[] = []
+  DRIVER_IDS: number[]
 ) {
-  bot.start(async (ctx) => {
+  bot.on("message", async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    try {
-      // --- Admin ---
-      if (ADMIN_IDS.includes(userId)) {
-        const keyboard = getMainMenuKeyboard(true, false);
-        return ctx.reply(`👋 Welcome Admin ${ctx.from?.first_name}!`, keyboard);
-      }
+    // ----------------------------
+    // Role-based check
+    // ----------------------------
+    if (ADMIN_IDS.includes(userId)) return; // Admin handler will handle
+    if (DRIVER_IDS.includes(userId)) return; // Driver handler will handle
 
-      // --- Rider ---
-      if (DRIVER_IDS.includes(userId)) {
-        const keyboard = getMainMenuKeyboard(false, true);
-        return ctx.reply(`🛵 Welcome Rider ${ctx.from?.first_name}!`, keyboard);
-      }
+    const msg = ctx.message;
+    if (!msg) return;
 
-      // --- Normal User ---
-      resetUserState(userId);
-
+    // ----------------------------
+    // Initialize user state
+    // ----------------------------
+    let state = userState.get(userId);
+    if (!state) {
       const { data: profile } = await supabase
         .from("profiles")
         .select("*")
         .eq("telegram_id", userId)
         .maybeSingle();
 
-      const state = await initUserState(userId, profile);
-
-      const welcomeMessage = profile
-        ? `👋 Welcome back ${profile.name}!\n\n🍽️ Campus Food Delivery - Hawassa University!\nWe bring delicious meals from nearby restaurants straight to your campus.\n\n✅ Fast & reliable delivery\n✅ Affordable prices for students\n✅ Fresh and hygienic food\n\nUse /order to start your meal or /help for assistance.`
-        : `👋 Welcome to Hawassa University Campus Food Delivery!\n\n🍽️ Get fresh meals delivered straight to your campus gate.\n✅ Fast delivery in just minutes\n✅ Affordable student-friendly prices\n✅ Wide selection of tasty meals from local restaurants\n\nPlease share your full name and phone number to get started.`;
-
-      return ctx.reply(welcomeMessage, getMainMenuKeyboard(false, false));
-    } catch (err) {
-      console.error("Start command error:", err);
-      try {
-        await ctx.reply(
-          "⚠️ An error occurred during initialization. Please try again later."
-        );
-      } catch {}
+      state = await initUserState(userId, profile);
     }
-  });
 
-  bot.on("message", async (ctx) => {
-    const userId = ctx.from!.id;
-    if (ADMIN_IDS.includes(userId) || DRIVER_IDS.includes(userId)) return;
-
-    const state = userState.get(userId) ?? (await initUserState(userId));
-    const msg = ctx.message;
-
+    // ----------------------------
+    // Profile registration steps
+    // ----------------------------
     if (state.step === "profile_ask_name" && isTextMessage(msg)) {
       state.name = msg.text;
       state.step = "profile_ask_phone";
@@ -139,33 +119,64 @@ export function handleUserFlow(
         quantity,
         price: state.currentFoodPrice!,
       });
+
       state.currentFood = undefined;
       state.currentFoodPrice = undefined;
 
       if (!state.restaurantId) return ctx.reply("⚠️ No restaurant selected.");
+
       const keyboard = await getFoodKeyboard(state.restaurantId);
       return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
         reply_markup: keyboard?.reply_markup,
       });
     }
 
+    // ----------------------------
+    // Main menu buttons (always active)
+    // ----------------------------
     if (isTextMessage(msg)) {
       switch (msg.text) {
         case "🍔 Order Food":
           state.step = "profile_ask_campus";
           return ctx.reply("🍔 Choose your campus:", campusKeyboard);
+
+        case "📦 My Orders":
+          const { data: orders } = await supabase
+            .from("orders")
+            .select("*")
+            .eq("telegram_id", userId)
+            .order("id", { ascending: false });
+
+          if (!orders || orders.length === 0)
+            return ctx.reply("📂 You have no orders yet.");
+
+          const ordersList = orders
+            .map(
+              (o) =>
+                `• 🆔 Order #${o.id}\n  🍽 ${o.restaurant}\n  💰 Total: ${o.total} ETB\n  📦 Status: ${o.status}`
+            )
+            .join("\n\n");
+
+          return ctx.reply(`📂 Your Orders:\n\n${ordersList}`);
+
         case "ℹ️ Help":
           return ctx.reply(
-            "📝 Help Menu\n• 🍔 Order Food → Start order\n• 📦 My Orders → View past orders\n• 🏠 Main Menu → Back"
+            "📝 Help Menu:\n" +
+              "• 🍔 Order Food → Start a new order\n" +
+              "• 📦 My Orders → View past orders\n" +
+              "• 🏠 Main Menu → Return to main menu\n" +
+              "• /start → Restart the bot anytime"
           );
-        case "📦 My Orders":
-          return ctx.reply("📂 You have no orders yet.");
+
         case "🏠 Main Menu":
           resetUserState(userId);
+          state.step = "idle";
           return ctx.reply("🏠 Main Menu:", getMainMenuKeyboard(false, false));
+
         default:
           return ctx.reply(
-            "🤔 Command not recognized. Use menu buttons or /start."
+            "🤔 Command not recognized. Use the buttons below or /start to restart.",
+            getMainMenuKeyboard(false, false)
           );
       }
     }
@@ -308,56 +319,63 @@ export function handleUserFlow(
 
     return ctx.answerCbQuery();
   });
-
   bot.action("request_contract", async (ctx) => {
-    const user = ctx.from!;
-    const userId = user.id;
+    const userId = ctx.from!.id;
 
-    const { data: profiles } = await supabase
-      .from("users")
-      .select("full_name, phone")
+    // 1️⃣ Fetch user profile from your DB
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("name, phone")
       .eq("telegram_id", userId)
       .maybeSingle();
 
+    if (error) {
+      console.error(error);
+    }
+
+    // Fallbacks if DB does not have values
     const fullName =
-      profiles?.full_name ||
-      `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim();
-    const phone = profiles?.phone || "Not Provided";
+      profile?.name ||
+      `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
+
+    const phone = profile?.phone || "Not Provided";
 
     await supabase.from("contract_requests").insert({
       user_id: userId,
-      username: user.username || null,
+      username: ctx.from!.username || null,
       full_name: fullName,
-      phone: phone,
+      phone,
       status: "pending",
     });
 
+    // 3️⃣ Notify all admins using NAME + PHONE from DB
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
         adminId,
         `📥 *New Contract Request*\n\n` +
           `👤 *Name:* ${fullName}\n` +
           `📱 *Phone:* ${phone}\n` +
-          `🔗 *Username:* @${user.username}\n` +
-          `🆔 *Telegram ID:* ${userId}\n\n` +
-          `Approve or reject:`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "✔ Approve", callback_data: `c_approve_${userId}` },
-                { text: "❌ Reject", callback_data: `c_reject_${userId}` },
-              ],
-            ],
-          },
-        }
+          `🔗 *Username:* @${ctx.from!.username}\n` +
+          `🆔 *Telegram ID:* ${userId}\n\n`,
+        { parse_mode: "Markdown" }
       );
     }
 
-    return ctx.reply(
-      "📨 Your contract request has been sent to the admin for approval."
+    // 4️⃣ Continue order UX
+    await ctx.editMessageText(
+      "📥 Your contract request has been sent!\n\n" +
+        "Admin will review it soon.\n" +
+        "Meanwhile, continue order with Pay on Delivery:",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+          ],
+        },
+      }
     );
+
+    return ctx.answerCbQuery();
   });
 
   bot.action(/^delivery_(.+)/, async (ctx) => {
@@ -415,6 +433,7 @@ export function handleUserFlow(
     );
     return ctx.answerCbQuery();
   });
+
   bot.action("confirm_order", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -485,6 +504,10 @@ export function handleUserFlow(
           status: "pending",
         },
       ]);
+
+      if (!state.campus) {
+        return ctx.reply("⚠️ Campus not selected yet.");
+      }
 
       const campusNormalized = state.campus
         .toLowerCase()

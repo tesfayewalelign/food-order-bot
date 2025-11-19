@@ -1,7 +1,25 @@
-// src/bot/handlers/adminHandler.ts
 import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../../config/supabase.js";
 
+type AdminStateAction =
+  | "add_restaurant"
+  | "edit_restaurant"
+  | "add_food"
+  | "edit_food"
+  | "add_rider"
+  | "edit_rider"
+  | "none";
+
+interface AdminState {
+  action?: AdminStateAction;
+  restaurantId?: string | number | null;
+  foodId?: string | number | null;
+  riderId?: string | number | null;
+}
+
+const adminStates = new Map<number, AdminState>();
+
+// Helper to generate 4-digit secret code
 function generateSecretCode(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
@@ -9,310 +27,654 @@ function generateSecretCode(): string {
 function isTextMessage(
   ctx: Context
 ): ctx is Context & { message: { text: string } } {
-  return (
-    !!ctx.message &&
-    "text" in ctx.message &&
-    typeof ctx.message.text === "string"
+  return !!ctx.message && typeof (ctx.message as any).text === "string";
+}
+
+function adminMainKeyboard() {
+  return Markup.inlineKeyboard(
+    [
+      Markup.button.callback("🍽 Restaurants", "admin_restaurants"),
+      Markup.button.callback("🍔 Foods", "admin_foods"),
+      Markup.button.callback("👤 Riders", "admin_riders"),
+      Markup.button.callback("📋 Orders", "admin_orders"),
+      Markup.button.callback("📦 Contracts", "admin_contracts"),
+      Markup.button.callback("📥 Requests", "admin_contract_requests"),
+      Markup.button.callback("📊 Dashboard", "admin_dashboard"),
+    ],
+    { columns: 2 }
   );
 }
-
-async function getRestaurantIdByName(name: string): Promise<number> {
-  const { data } = await supabase
-    .from("restaurants")
-    .select("id")
-    .eq("name", name)
-    .single();
-  return data?.id || 0;
-}
-
-export async function getRestaurantKeyboard() {
-  const { data: restaurants } = await supabase
-    .from("restaurants")
-    .select("*")
-    .order("id");
-
-  if (!restaurants || restaurants.length === 0)
-    return Markup.inlineKeyboard([]);
-
-  const buttons = restaurants.map((r) =>
-    Markup.button.callback(`🍽 ${r.name}`, `foods_restaurant_${r.id}`)
-  );
-
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    const row = [buttons[i], buttons[i + 1]].filter(Boolean) as any;
-    rows.push(row);
-  }
-
-  return Markup.inlineKeyboard(rows);
-}
-
-export async function getFoodKeyboard(restaurantId: number) {
-  const { data: foods } = await supabase
-    .from("foods")
-    .select("*")
-    .eq("restaurant_id", restaurantId)
-    .order("id");
-
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-
-  if (!foods || foods.length === 0) {
-    rows.push([
-      Markup.button.callback("➕ Add New Food", `add_food_${restaurantId}`),
-    ]);
-  } else {
-    foods.forEach((f) => {
-      rows.push([
-        Markup.button.callback(
-          `✏️ ${f.name} (${f.price} ETB)`,
-          `edit_food_${f.id}`
-        ),
-        Markup.button.callback(`🗑 ${f.name}`, `delete_food_${f.id}`),
-      ]);
-    });
-    rows.push([
-      Markup.button.callback("➕ Add New Food", `add_food_${restaurantId}`),
-    ]);
-  }
-
-  rows.push([Markup.button.callback("🔙 Back", "menu_foods")]);
-  return Markup.inlineKeyboard(rows);
-}
-
-interface AdminState {
-  action?:
-    | "add_restaurant"
-    | "add_food"
-    | "add_rider"
-    | "edit_food"
-    | "set_contract";
-  restaurantId?: number;
-  foodId?: string;
-  tempData?: any;
-}
-
-const adminStates = new Map<number, AdminState>();
-
 export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.command("admin", async (ctx) => {
-    const adminId = ctx.from?.id;
-    if (!adminId || !ADMIN_IDS.includes(adminId))
-      return ctx.reply("🚫 You are not authorized.");
-
-    await ctx.reply(
-      `👋 Welcome Admin ${ctx.from?.first_name}!`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("👤 Manage Riders", "menu_riders")],
-        [Markup.button.callback("🍽 Manage Restaurants", "menu_restaurants")],
-        [Markup.button.callback("🍔 Manage Foods", "menu_foods")],
-        [Markup.button.callback("📋 Manage Orders", "menu_orders")],
-        [Markup.button.callback("📦 Manage Contracts", "menu_contracts")],
-      ])
-    );
-  });
-
-  bot.action("menu_contracts", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      "📦 Contracts Menu:\n\nUse commands:\n/contracts\n/setcontract <telegram_id> <remaining_orders>\n/deactivatecontract <telegram_id>"
-    );
-  });
-
-  bot.command("contracts", async (ctx) => {
-    const adminId = ctx.from?.id;
-    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
-
-    const { data, error } = await supabase
-      .from("user_contracts")
-      .select("telegram_id, remaining_orders, is_active");
-
-    if (error) return ctx.reply("⚠️ Could not fetch contracts.");
-    if (!data || data.length === 0)
-      return ctx.reply("No contract users found.");
-
-    const text = data
-      .map(
-        (u) =>
-          `👤 ID: ${u.telegram_id}\n📦 Remaining Orders: ${
-            u.remaining_orders
-          }\n✅ Active: ${u.is_active ? "Yes" : "No"}`
-      )
-      .join("\n\n");
-
-    ctx.reply(`📋 All Contract Users:\n\n${text}`);
-  });
-
-  bot.command("setcontract", async (ctx) => {
-    const adminId = ctx.from?.id;
-    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
-    if (!isTextMessage(ctx)) return;
-
-    const parts = ctx.message.text.split(" ");
-    if (parts.length !== 3)
-      return ctx.reply("⚠️ Use: /setcontract <telegram_id> <remaining_orders>");
-
-    const targetId = Number(parts[1]);
-    const remaining = Number(parts[2]);
-
-    if (isNaN(targetId) || isNaN(remaining) || remaining < 0)
-      return ctx.reply("⚠️ Invalid input.");
-
-    const { error } = await supabase.from("user_contracts").upsert(
-      [
-        {
-          telegram_id: targetId,
-          remaining_orders: remaining,
-          is_active: remaining > 0,
-          updated_at: new Date(),
-        },
-      ],
-      { onConflict: "telegram_id" }
-    );
-
-    if (error) return ctx.reply("⚠️ Could not update contract.");
-
-    ctx.reply(
-      `✅ Contract updated for user ${targetId}.\n📦 Remaining: ${remaining}\nActive: ${
-        remaining > 0 ? "Yes" : "No"
-      }`
-    );
-  });
-
-  bot.command("deactivatecontract", async (ctx) => {
-    const adminId = ctx.from?.id;
-    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
-    if (!isTextMessage(ctx)) return;
-
-    const parts = ctx.message.text.split(" ");
-    if (parts.length !== 2)
-      return ctx.reply("⚠️ Use: /deactivatecontract <telegram_id>");
-
-    const targetId = Number(parts[1]);
-    if (isNaN(targetId)) return ctx.reply("⚠️ Invalid ID");
-
-    const { error } = await supabase
-      .from("user_contracts")
-      .update({ is_active: false, updated_at: new Date() })
-      .eq("telegram_id", targetId);
-
-    if (error) return ctx.reply("⚠️ Could not deactivate contract.");
-
-    ctx.reply(`❌ Contract deactivated for user ${targetId}`);
-  });
-
-  bot.action("menu_restaurants", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      "🍽 Restaurants Menu:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("➕ Add Restaurant", "add_restaurant")],
-        [Markup.button.callback("📋 List Restaurants", "list_restaurants")],
-        [Markup.button.callback("🔙 Back", "admin_back")],
-      ])
-    );
-  });
-
-  bot.action("add_restaurant", async (ctx) => {
-    await ctx.answerCbQuery();
-    const adminId = ctx.from?.id;
-    if (!adminId) return;
-    adminStates.set(adminId, { action: "add_restaurant" });
-    await ctx.editMessageText("🏗 Send the restaurant name:");
-  });
-
-  bot.action("list_restaurants", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data } = await supabase.from("restaurants").select("*").order("id");
-    if (!data || data.length === 0)
-      return ctx.editMessageText("📭 No restaurants found.");
-    const text = data.map((r) => `ID: ${r.id} | ${r.name}`).join("\n");
-    await ctx.editMessageText(`🍽 Restaurants List:\n${text}`);
-  });
-
-  bot.action("menu_foods", async (ctx) => {
-    await ctx.answerCbQuery();
-    const keyboard = await getRestaurantKeyboard();
-    await ctx.editMessageText("🍔 Select a restaurant:", keyboard);
-  });
-
-  bot.action(/foods_restaurant_(\d+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = Number(ctx.match[1]);
-    const keyboard = await getFoodKeyboard(id);
-    await ctx.editMessageText("🍔 Foods:", keyboard);
-  });
-
-  bot.action(/add_food_(\d+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const restaurantId = Number(ctx.match[1]);
-    const adminId = ctx.from?.id;
-    if (!adminId) return;
-    adminStates.set(adminId, { action: "add_food", restaurantId });
-    await ctx.editMessageText("Send: Food Name | Price");
-  });
-
-  bot.action("menu_riders", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      "👤 Riders Menu:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("➕ Add Rider", "add_rider_menu")],
-        [Markup.button.callback("📋 List Riders", "list_riders")],
-        [Markup.button.callback("🔙 Back", "admin_back")],
-      ])
-    );
-  });
-
-  bot.action("add_rider_menu", async (ctx) => {
-    await ctx.answerCbQuery();
-    const adminId = ctx.from?.id;
-    if (!adminId) return;
-    adminStates.set(adminId, { action: "add_rider" });
-    await ctx.editMessageText("Send: Name | Phone | Campus");
-  });
-
-  bot.action("list_riders", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data } = await supabase.from("riders").select("*").order("id");
-    if (!data || data.length === 0)
-      return ctx.editMessageText("📭 No riders found.");
-    const text = data
-      .map(
-        (r) =>
-          `ID: ${r.id} | ${r.name} | ${r.phone} | ${r.campus} | Active: ${
-            r.active ? "✅" : "❌"
-          }`
-      )
-      .join("\n");
-    await ctx.editMessageText(`👤 Riders:\n${text}`);
-  });
-
-  bot.action("menu_orders", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data } = await supabase.from("orders").select("*").order("id");
-    if (!data || data.length === 0)
-      return ctx.editMessageText("📭 No orders found.");
-    const text = data
-      .map(
-        (o) =>
-          `ID: ${o.id} | User: ${o.user_name} | Phone: ${o.phone} | Campus: ${
-            o.campus
-          } | Restaurant: ${o.restaurant} | Foods: ${o.foods} | Status: ${
-            o.status || "Pending"
-          }`
-      )
-      .join("\n");
-    await ctx.editMessageText(`📋 Orders:\n${text}`);
+    const id = ctx.from?.id;
+    if (!id || !ADMIN_IDS.includes(id)) return ctx.reply("🚫 Not authorized.");
+    console.log("[ADMIN] /admin opened by", id);
+    await ctx.reply("*👋 Welcome to Admin Panel*", {
+      parse_mode: "Markdown",
+      ...adminMainKeyboard(),
+    });
   });
 
   bot.action("admin_back", async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.editMessageText("🔙 Back to admin menu. Use /admin.");
+    await ctx.editMessageText("*👋 Admin Panel*", {
+      parse_mode: "Markdown",
+      ...adminMainKeyboard(),
+    });
+  });
+
+  bot.action("admin_restaurants", async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    if (!adminId || !ADMIN_IDS.includes(adminId))
+      return ctx.reply("🚫 Not authorized.");
+
+    const { data: restaurants, error } = await supabase
+      .from("restaurants")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) return ctx.editMessageText("❌ Could not load restaurants.");
+
+    const rows = (restaurants || []).map((r: any) => [
+      Markup.button.callback(`${r.name}`, `admin_restaurant_view_${r.id}`),
+      Markup.button.callback("✏️", `admin_restaurant_edit_${r.id}`),
+      Markup.button.callback("🗑", `admin_restaurant_delete_${r.id}`),
+    ]);
+    rows.push([
+      Markup.button.callback("➕ Add Restaurant", "admin_restaurant_add"),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText("🍽 Restaurants:", Markup.inlineKeyboard(rows));
+  });
+
+  bot.action("admin_restaurant_add", async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    if (!adminId) return;
+    adminStates.set(adminId, { action: "add_restaurant" });
+    await ctx.editMessageText(
+      "🏗 Send restaurant name to add (single message)."
+    );
+  });
+
+  bot.action(/admin_restaurant_edit_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    const restaurantId = ctx.match[1];
+    if (!adminId) return;
+    adminStates.set(adminId, { action: "edit_restaurant", restaurantId });
+    await ctx.editMessageText("✏️ Send new name for the restaurant.");
+  });
+
+  bot.action(/admin_restaurant_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    try {
+      await supabase.from("restaurants").delete().eq("id", id);
+      await ctx.editMessageText(`🗑 Restaurant deleted: ${id}`);
+    } catch {
+      await ctx.editMessageText("❌ Failed to delete restaurant.");
+    }
+  });
+
+  bot.action(/admin_restaurant_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: r, error } = await supabase
+      .from("restaurants")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!r || error)
+      return ctx.answerCbQuery("⚠️ Not found", { show_alert: true });
+
+    await ctx.editMessageText(
+      `🍽 Restaurant: ${r.name}\nID: ${r.id}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("Manage Foods", `admin_foods_for_${r.id}`)],
+        [Markup.button.callback("🔙 Back", "admin_restaurants")],
+      ])
+    );
+  });
+
+  bot.action("admin_foods", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { data: restaurants } = await supabase
+      .from("restaurants")
+      .select("id,name");
+    if (!restaurants || restaurants.length === 0)
+      return ctx.editMessageText("No restaurants available.");
+
+    const rows = restaurants.map((r: any) => [
+      Markup.button.callback(`${r.name}`, `admin_foods_for_${r.id}`),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText(
+      "Select restaurant to manage foods:",
+      Markup.inlineKeyboard(rows)
+    );
+  });
+
+  bot.action(/admin_foods_for_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const rid = ctx.match[1];
+    const { data: foods } = await supabase
+      .from("foods")
+      .select("*")
+      .eq("restaurant_id", rid);
+
+    const rows = (foods || []).map((f: any) => [
+      Markup.button.callback(
+        `${f.name} (${f.price} ETB)`,
+        `admin_food_view_${f.id}`
+      ),
+      Markup.button.callback("✏️", `admin_food_edit_${f.id}`),
+      Markup.button.callback("🗑", `admin_food_delete_${f.id}`),
+    ]);
+    rows.push([Markup.button.callback("➕ Add Food", `admin_food_add_${rid}`)]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_foods")]);
+
+    await ctx.editMessageText(
+      `🍔 Foods for restaurant ${rid}:`,
+      Markup.inlineKeyboard(rows)
+    );
+  });
+
+  bot.action(/admin_food_add_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    const restaurantId = ctx.match[1];
+    adminStates.set(adminId!, { action: "add_food", restaurantId });
+    await ctx.editMessageText(
+      "🏗 Send food as: Name | Price (e.g. Burger | 50)"
+    );
+  });
+
+  bot.action(/admin_food_edit_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    const foodId = ctx.match[1];
+    adminStates.set(adminId!, { action: "edit_food", foodId });
+    await ctx.editMessageText("✏️ Send new food as: Name | Price");
+  });
+
+  bot.action(/admin_food_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    try {
+      await supabase.from("foods").delete().eq("id", id);
+      await ctx.editMessageText(`🗑 Food deleted: ${id}`);
+    } catch {
+      await ctx.editMessageText("❌ Failed to delete food.");
+    }
+  });
+
+  bot.action(/admin_food_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: f } = await supabase
+      .from("foods")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!f) return ctx.answerCbQuery("⚠️ Food not found", { show_alert: true });
+
+    await ctx.editMessageText(
+      `🍔 Food: ${f.name}\nPrice: ${f.price} ETB\nID: ${f.id}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back", "admin_foods")],
+      ])
+    );
+  });
+
+  bot.action("admin_riders", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { data: riders } = await supabase.from("riders").select("*");
+    const rows = (riders || []).map((r: any) => [
+      Markup.button.callback(
+        `${r.name} (${r.campus})`,
+        `admin_rider_view_${r.id}`
+      ),
+      Markup.button.callback(
+        r.active ? "🟢" : "🔴",
+        `admin_rider_toggle_${r.id}`
+      ),
+      Markup.button.callback("🗑", `admin_rider_delete_${r.id}`),
+    ]);
+    rows.push([Markup.button.callback("➕ Add Rider", "admin_rider_add")]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+    await ctx.editMessageText("👤 Riders:", Markup.inlineKeyboard(rows));
+  });
+
+  bot.action("admin_rider_add", async (ctx) => {
+    await ctx.answerCbQuery();
+    const adminId = ctx.from?.id;
+    if (!adminId) return;
+
+    adminStates.set(adminId, { action: "add_rider" });
+    await ctx.editMessageText(
+      "🏗 Send rider info in this format:\nName | Phone | Campus"
+    );
   });
 
   bot.on("text", async (ctx) => {
     const adminId = ctx.from?.id;
-    if (!adminId) return;
+    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
+
+    const state = adminStates.get(adminId);
+    if (!state) return;
+
+    const text = ctx.message.text.trim();
+
+    try {
+      if (state.action === "add_rider") {
+        const [name, phone, campus] = text.split("|").map((t) => t.trim());
+        if (!name || !phone || !campus)
+          return ctx.reply("⚠️ Invalid format. Use: Name | Phone | Campus");
+
+        const secret_code = Math.floor(1000 + Math.random() * 9000).toString();
+
+        const { error } = await supabase
+          .from("riders")
+          .insert([{ name, phone, campus, secret_code }]);
+
+        if (error) return ctx.reply("❌ Failed to add rider.");
+
+        await ctx.reply(
+          `✅ Rider "${name}" added!\nSecret code: ${secret_code}\nSend this code to the rider to activate the bot with:\n/activate ${secret_code}`
+        );
+      }
+    } catch (err) {
+      console.error("[ADMIN] text error:", err);
+      await ctx.reply("❌ An error occurred.");
+    } finally {
+      adminStates.delete(adminId);
+    }
+  });
+
+  bot.action(/admin_rider_toggle_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!rider) return ctx.reply("⚠️ Rider not found");
+
+    await supabase
+      .from("riders")
+      .update({ active: !rider.active })
+      .eq("id", id);
+
+    await ctx.reply(
+      `Rider ${rider.name} is now ${
+        !rider.active ? "active 🟢" : "inactive 🔴"
+      }`
+    );
+  });
+
+  bot.action(/admin_rider_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase.from("riders").delete().eq("id", id);
+    await ctx.reply(`🗑 Rider deleted: ${id}`);
+  });
+
+  bot.on("text", async (ctx) => {
+    const adminId = ctx.from?.id;
+    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
+    const state = adminStates.get(adminId);
+    if (!state) return;
+
+    const text = ctx.message.text.trim();
+
+    try {
+      if (state.action === "add_rider") {
+        const [name, phone, campus] = text.split("|").map((s) => s.trim());
+        if (!name || !phone || !campus)
+          return ctx.reply("⚠️ Use format: Name | Phone | Campus");
+
+        const secretCode = generateSecretCode();
+
+        const { error } = await supabase
+          .from("riders")
+          .insert([
+            { name, phone, campus, secret_code: secretCode, active: true },
+          ]);
+
+        if (error) return ctx.reply("❌ Failed to add rider.");
+
+        await ctx.reply(
+          `✅ Rider "${name}" added with secret code: ${secretCode}`
+        );
+      }
+    } catch (err) {
+      console.error("[ADMIN] text error:", err);
+      await ctx.reply("❌ An error occurred.");
+    } finally {
+      adminStates.delete(adminId);
+    }
+  });
+
+  bot.action("admin_orders", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { data: orders } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (!orders || orders.length === 0)
+      return ctx.editMessageText("No orders available.");
+
+    const rows = orders.map((o: any) => [
+      Markup.button.callback(
+        `${o.user_name} | ${o.campus} | ${o.status}`,
+        `admin_order_view_${o.id}`
+      ),
+      Markup.button.callback("🗑 Delete", `admin_order_delete_${o.id}`),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText("📋 Orders:", Markup.inlineKeyboard(rows));
+  });
+
+  bot.action(/admin_order_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: o } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!o)
+      return ctx.answerCbQuery("⚠️ Order not found", { show_alert: true });
+
+    await ctx.editMessageText(
+      `🧾 Order ID: ${o.id}\nUser: ${o.user_name}\nPhone: ${o.phone}\nCampus: ${o.campus}\nRestaurant: ${o.restaurant}\nFoods: ${o.foods}\nTotal: ${o.total_price} ETB\nStatus: ${o.status}`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            o.status === "Pending" ? "✅ Complete Order" : "↩️ Mark Pending",
+            `admin_order_toggle_${o.id}`
+          ),
+        ],
+        [Markup.button.callback("🔙 Back", "admin_orders")],
+      ])
+    );
+  });
+
+  bot.action(/admin_order_toggle_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: o } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!o) return ctx.reply("⚠️ Order not found");
+    const newStatus = o.status === "Pending" ? "Completed" : "Pending";
+    await supabase.from("orders").update({ status: newStatus }).eq("id", id);
+    await ctx.reply(`✅ Order status updated to ${newStatus}`);
+    ctx.deleteMessage();
+  });
+
+  bot.action(/admin_order_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase.from("orders").delete().eq("id", id);
+    await ctx.reply(`🗑 Order deleted: ${id}`);
+  });
+
+  bot.action("admin_contract_requests", async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const { data: requests } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (!requests || requests.length === 0)
+      return ctx.editMessageText("No contract requests available.");
+
+    const rows = requests.map((r) => [
+      Markup.button.callback(
+        `${r.user_name} | ${r.status}`,
+        `admin_contract_request_view_${r.id}`
+      ),
+    ]);
+
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText(
+      "📥 Contract Requests:",
+      Markup.inlineKeyboard(rows)
+    );
+  });
+
+  bot.action(/admin_contract_request_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const id = ctx.match[1];
+
+    const { data: r } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!r)
+      return ctx.answerCbQuery("⚠️ Request not found", { show_alert: true });
+
+    await ctx.reply(
+      `📄 *Contract Request*\n\n` +
+        `👤 Name: *${r.user_name}*\n` +
+        `📱 Phone: *${r.phone}*\n` +
+        `📅 Start: *${r.start_date}*\n` +
+        `📅 End: *${r.end_date}*\n` +
+        `🆔 User ID: *${r.telegram_id}*\n` +
+        `📌 Status: *${r.status}*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              "✅ Approve",
+              `admin_contract_request_approve_${r.id}`
+            ),
+          ],
+          [
+            Markup.button.callback(
+              "❌ Reject",
+              `admin_contract_request_reject_${r.id}`
+            ),
+          ],
+          [Markup.button.callback("🔙 Back", "admin_contract_requests")],
+        ]).reply_markup, // ✔ FIX: extract only the reply_markup
+      }
+    );
+  });
+
+  bot.action(/admin_contract_request_approve_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const id = ctx.match[1];
+
+    const { data: req } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!req) return ctx.reply("⚠️ Request not found");
+
+    // Create contract
+    await supabase.from("contracts").insert([
+      {
+        user_name: req.user_name,
+        start_date: req.start_date,
+        end_date: req.end_date,
+        telegram_id: req.telegram_id,
+        status: "Active",
+      },
+    ]);
+
+    // Remove request
+    await supabase.from("contract_requests").delete().eq("id", id);
+
+    // Notify the user
+    await ctx.telegram.sendMessage(
+      req.telegram_id,
+      "✅ *Your contract request has been approved!*",
+      { parse_mode: "Markdown" }
+    );
+
+    await ctx.reply("✅ Contract approved and activated!");
+    ctx.deleteMessage();
+  });
+
+  bot.action(/admin_contract_request_reject_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const id = ctx.match[1];
+
+    const { data: req } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!req) return ctx.reply("⚠️ Request not found");
+
+    // Update status
+    await supabase
+      .from("contract_requests")
+      .update({ status: "Rejected" })
+      .eq("id", id);
+
+    await ctx.telegram.sendMessage(
+      req.telegram_id,
+      "❌ *Your contract request was rejected.*",
+      { parse_mode: "Markdown" }
+    );
+
+    await ctx.reply("❌ Contract request rejected!");
+    ctx.deleteMessage();
+  });
+
+  bot.action(/admin_contract_request_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase.from("contract_requests").delete().eq("id", id);
+    await ctx.reply(`🗑 Contract request deleted: ${id}`);
+  });
+
+  // ---------------- Active Contracts ----------------
+  bot.action("admin_contracts", async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const { data: contracts } = await supabase
+      .from("contracts")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (!contracts || contracts.length === 0)
+      return ctx.editMessageText("No active contracts.");
+
+    const rows = contracts.map((c: any) => [
+      Markup.button.callback(
+        `${c.user_name} | ${c.status}`,
+        `admin_contract_view_${c.id}`
+      ),
+      Markup.button.callback("🗑 Delete", `admin_contract_delete_${c.id}`),
+      Markup.button.callback(
+        "🔄 Reactivate",
+        `admin_contract_reactivate_${c.id}`
+      ),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText(
+      "📦 Active Contracts:",
+      Markup.inlineKeyboard(rows)
+    );
+  });
+
+  // ---------------- Reactivate Contract ----------------
+  bot.action(/admin_contract_reactivate_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+
+    const { data: c } = await supabase
+      .from("contracts")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!c) return ctx.reply("⚠️ Contract not found");
+
+    await supabase.from("contracts").update({ status: "Active" }).eq("id", id);
+    await ctx.reply(`🔄 Contract for ${c.user_name} has been reactivated!`);
+    ctx.deleteMessage();
+  });
+
+  bot.action(/admin_contract_delete_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase.from("contracts").delete().eq("id", id);
+    await ctx.reply(`🗑 Contract deleted: ${id}`);
+  });
+
+  bot.action("admin_dashboard", async (ctx) => {
+    await ctx.answerCbQuery();
+    try {
+      const [
+        restaurantsCount,
+        foodsCount,
+        ridersCount,
+        ordersCount,
+        contractsCount,
+      ] = await Promise.all([
+        supabase
+          .from("restaurants")
+          .select("id")
+          .then((r) => r.data?.length ?? 0),
+        supabase
+          .from("foods")
+          .select("id")
+          .then((r) => r.data?.length ?? 0),
+        supabase
+          .from("riders")
+          .select("id")
+          .then((r) => r.data?.length ?? 0),
+        supabase
+          .from("orders")
+          .select("id")
+          .then((r) => r.data?.length ?? 0),
+        supabase
+          .from("contracts")
+          .select("id")
+          .then((r) => r.data?.length ?? 0),
+      ]);
+
+      const text = `📊 Dashboard\n\n🍽 Restaurants: ${restaurantsCount}\n🍔 Foods: ${foodsCount}\n🛵 Riders: ${ridersCount}\n🧾 Orders: ${ordersCount}\n📦 Contracts: ${contractsCount}`;
+      await ctx.editMessageText(
+        text,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔙 Back", "admin_back")],
+        ])
+      );
+    } catch {
+      await ctx.editMessageText("❌ Failed to load dashboard.");
+    }
+  });
+
+  // ---------------- Global Text Listener ----------------
+  bot.on("text", async (ctx) => {
+    const adminId = ctx.from?.id;
+    if (!adminId || !ADMIN_IDS.includes(adminId)) return;
     const state = adminStates.get(adminId);
     if (!state) return;
 
@@ -324,90 +686,44 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           .from("restaurants")
           .insert([{ name: text }]);
         if (error) return ctx.reply("❌ Failed to add restaurant.");
-        ctx.reply(`✅ Restaurant "${text}" added!`);
+        await ctx.reply(`✅ Restaurant "${text}" added!`);
       }
 
-      if (state.action === "add_rider") {
-        const parts = text.split("|").map((p) => p.trim());
-        if (parts.length !== 3)
-          return ctx.reply("⚠️ Format: Name | Phone | Campus");
-
-        const [name, phone, campus] = parts;
-        const secret_code = generateSecretCode();
-
-        const { error } = await supabase
-          .from("riders")
-          .insert([{ name, phone, campus, secret_code, active: true }]);
-
-        if (error) return ctx.reply("❌ Failed to add rider.");
-
-        ctx.reply(
-          `✅ Rider added!\nName: ${name}\nPhone: ${phone}\nCampus: ${campus}\nSecret Code: ${secret_code}`
-        );
+      if (state.action === "edit_restaurant" && state.restaurantId) {
+        await supabase
+          .from("restaurants")
+          .update({ name: text })
+          .eq("id", state.restaurantId);
+        await ctx.reply(`✏️ Restaurant updated.`);
       }
 
-      if (state.action === "add_food") {
-        const parts = text.split("|").map((p) => p.trim());
-        if (parts.length !== 2) return ctx.reply("Format: Food Name | Price");
-
-        const [name, priceStr] = parts;
+      if (state.action === "add_food" && state.restaurantId) {
+        const [name, priceStr] = text.split("|").map((p) => p.trim());
         const price = Number(priceStr);
-        if (isNaN(price)) return ctx.reply("⚠️ Price must be a number");
-
-        const { error } = await supabase
+        if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
+        await supabase
           .from("foods")
-          .insert([{ name, restaurant_id: state.restaurantId, price }]);
-
-        if (error) return ctx.reply("❌ Failed to add food.");
-
-        ctx.reply(`✅ Food "${name}" added with price ${price} ETB!`);
+          .insert([{ name, price, restaurant_id: state.restaurantId }]);
+        await ctx.reply(`✅ Food "${name}" added at ${price} ETB`);
       }
+
+      if (state.action === "edit_food" && state.foodId) {
+        const [name, priceStr] = text.split("|").map((p) => p.trim());
+        const price = Number(priceStr);
+        if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
+        await supabase
+          .from("foods")
+          .update({ name, price })
+          .eq("id", state.foodId);
+        await ctx.reply("✏️ Food updated.");
+      }
+    } catch (err) {
+      console.error("[ADMIN] text error:", err);
+      await ctx.reply("❌ An error occurred.");
     } finally {
       adminStates.delete(adminId);
     }
   });
-  bot.action(/^c_(approve|reject)_(\d+)$/, async (ctx) => {
-    const query = ctx.callbackQuery;
 
-    // Ensure callbackQuery exists and has data
-    if (!query || !("data" in query) || !query.data) return ctx.answerCbQuery();
-
-    const match = query.data.match(/^c_(approve|reject)_(\d+)$/);
-    if (!match) return ctx.answerCbQuery();
-
-    const [_, action, userIdStr] = match;
-    const userId = Number(userIdStr);
-
-    if (action === "approve") {
-      await supabase.from("contracts").insert({
-        user_id: userId,
-        is_active: true,
-        remaining_orders: 5,
-      });
-
-      await supabase
-        .from("contract_requests")
-        .update({ status: "approved" })
-        .eq("user_id", userId);
-
-      await ctx.telegram.sendMessage(
-        userId,
-        "✅ Your contract has been approved! You can now use Contract Delivery option."
-      );
-      await ctx.editMessageText("✔ Contract approved.");
-    } else {
-      await supabase
-        .from("contract_requests")
-        .update({ status: "rejected" })
-        .eq("user_id", userId);
-
-      await ctx.telegram.sendMessage(
-        userId,
-        "❌ Your contract request was rejected."
-      );
-      await ctx.editMessageText("❌ Contract rejected.");
-    }
-
-    return ctx.answerCbQuery();
-  });
+  console.log("[ADMIN] setupAdminHandler initialized");
 }

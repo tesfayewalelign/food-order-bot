@@ -2,15 +2,6 @@ import { Markup } from "telegraf";
 import { supabase } from "../config/supabase.js";
 
 export function getMainMenuKeyboard(isAdmin: boolean, isDriver: boolean) {
-  if (isAdmin) {
-    return Markup.keyboard([
-      ["📦 View Orders", "➕ Add Restaurant"],
-      ["👥 Manage Users", "⚙️ Settings"],
-      ["📦 Manage Contracts", "menu_contracts"],
-      ["🏠 Main Menu"],
-    ]).resize();
-  }
-
   if (isDriver) {
     return Markup.keyboard([
       ["🚗 My Deliveries", "📅 Schedule"],
@@ -38,7 +29,18 @@ export const campusKeyboard = Markup.inlineKeyboard([
       "campus_main_boys_africa"
     ),
   ],
-  [Markup.button.callback("🏫 Main Girls Dorm", "campus_main_girls")],
+  [
+    Markup.button.callback(
+      "🏫 Main Girls White House Dorm",
+      "campus_main_girls_white_house"
+    ),
+  ],
+  [
+    Markup.button.callback(
+      "🏫 Main Girls Africa House Dorm",
+      "campus_main_girls_Africa_house"
+    ),
+  ],
   [Markup.button.callback("🏫 Techno Boys Dorm", "campus_techno_boys")],
   [Markup.button.callback("🏫 Techno Girls Dorm", "campus_techno_girls")],
 ]);

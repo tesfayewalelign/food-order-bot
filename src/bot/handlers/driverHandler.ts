@@ -15,18 +15,62 @@ export function setupDriverHandler(
   bot: Telegraf<Context>,
   DRIVER_IDS: number[]
 ) {
-  bot.start(async (ctx, next) => {
+  // ---------------- /start ----------------
+  bot.start(async (ctx) => {
     const userId = ctx.from?.id;
+    if (!userId) return;
 
-    // If the user is NOT a driver → continue to user flow
-    if (!userId || !DRIVER_IDS.includes(userId)) {
-      return next();
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("telegram_id", userId)
+      .maybeSingle();
+
+    if (rider) {
+      // Rider is already activated
+      return ctx.reply(
+        `🚗 Welcome back, ${rider.name}!\nChoose an option:`,
+        Markup.keyboard([
+          ["📦 My Deliveries"],
+          ["📅 Schedule"],
+          ["🏠 Main Menu"],
+        ]).resize()
+      );
+    } else {
+      // Rider not activated yet
+      return ctx.reply(
+        "🛵 Welcome Rider!\nPlease activate your account with the code sent by admin:\n/activate <4-digit-code>"
+      );
     }
+  });
 
-    console.log("[DRIVER] /start from driver:", userId);
+  // ---------------- /activate ----------------
+  bot.command("activate", async (ctx) => {
+    if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
-    return ctx.reply(
-      "🚗 Welcome Driver!\nChoose an option:",
+    const match = ctx.message.text.trim().match(/^\/activate\s+(\d{4})$/);
+    if (!match) return ctx.reply("⚠️ Please use: /activate <4-digit-code>");
+
+    const code = match[1];
+
+    // Find rider by secret_code
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("secret_code", code)
+      .maybeSingle();
+
+    if (!rider) return ctx.reply("❌ Invalid secret code.");
+
+    // Update telegram_id
+    await supabase
+      .from("riders")
+      .update({ telegram_id: ctx.from.id })
+      .eq("id", rider.id);
+
+    // Send welcome menu
+    ctx.reply(
+      `✅ Rider activated! Welcome ${rider.name}!\nChoose an option:`,
       Markup.keyboard([
         ["📦 My Deliveries"],
         ["📅 Schedule"],
@@ -34,38 +78,18 @@ export function setupDriverHandler(
       ]).resize()
     );
   });
-  bot.command("activate", async (ctx) => {
-    if (!isTextMessage(ctx)) return;
 
-    const match = ctx.message.text.trim().match(/^\/activate\s+(\d{4})$/);
-    if (!match) return ctx.reply("⚠️ Please use: /activate <4-digit-code>");
+  // ---------------- /my_orders ----------------
+  bot.command("my_orders", async (ctx) => {
+    if (!ctx.from?.id) return;
 
-    const code = match[1];
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("secret_code", code)
-      .single();
-
-    if (!rider) return ctx.reply("❌ Invalid secret code.");
-
-    await supabase
-      .from("riders")
-      .update({ telegram_id: ctx.from?.id })
-      .eq("id", rider.id);
-
-    ctx.reply(`✅ Rider activated! Welcome ${rider.name}`);
-  });
-
-  async function sendPendingOrders(ctx: Context & { from: { id: number } }) {
     const riderId = ctx.from.id;
 
     const { data: rider } = await supabase
       .from("riders")
       .select("*")
       .eq("telegram_id", riderId)
-      .single();
+      .maybeSingle();
 
     if (!rider)
       return ctx.reply("⚠️ You are not activated. Use /activate <code>");
@@ -81,17 +105,15 @@ export function setupDriverHandler(
       return ctx.reply("📭 No new orders available.");
 
     let text = "📦 Pending Orders:\n";
-
     for (const o of orders) {
       text += `\nID: ${o.id} | User: ${o.user_name} | Phone: ${o.phone} | Foods: ${o.foods}`;
       text += `\n/accept ${o.id} - Accept | /reject ${o.id} - Reject\n`;
     }
 
     ctx.reply(text);
-  }
+  });
 
-  bot.command("my_orders", sendPendingOrders);
-
+  // ---------------- /accept ----------------
   bot.command("accept", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
@@ -105,21 +127,20 @@ export function setupDriverHandler(
       .from("riders")
       .select("*")
       .eq("telegram_id", riderId)
-      .single();
+      .maybeSingle();
 
     if (!rider)
       return ctx.reply("⚠️ You are not activated. Use /activate <code>");
 
-    const { error } = await supabase
+    await supabase
       .from("orders")
       .update({ status: "Accepted", rider_id: rider.id })
       .eq("id", orderId);
 
-    if (error) return ctx.reply("❌ Failed to accept order.");
-
     ctx.reply(`✅ Order #${orderId} accepted!`);
   });
 
+  // ---------------- /reject ----------------
   bot.command("reject", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
@@ -133,21 +154,20 @@ export function setupDriverHandler(
       .from("riders")
       .select("*")
       .eq("telegram_id", riderId)
-      .single();
+      .maybeSingle();
 
     if (!rider)
       return ctx.reply("⚠️ You are not activated. Use /activate <code>");
 
-    const { error } = await supabase
+    await supabase
       .from("orders")
       .update({ status: "Rejected" })
       .eq("id", orderId);
 
-    if (error) return ctx.reply("❌ Failed to reject order.");
-
     ctx.reply(`❌ Order #${orderId} rejected.`);
   });
 
+  // ---------------- /rider_help ----------------
   bot.command("rider_help", (ctx) => {
     ctx.reply(
       `🛵 Rider Commands:
