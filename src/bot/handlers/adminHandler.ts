@@ -34,10 +34,8 @@ async function handleAdminText(ctx: Context, state: AdminState) {
 
   switch (msg.text) {
     case "📥 View Orders":
-      // your logic here
       break;
     case "➕ Add Restaurant":
-      // your logic here
       break;
     default:
       await ctx.reply("⚠️ Unknown admin command.");
