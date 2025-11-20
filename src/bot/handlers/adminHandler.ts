@@ -28,6 +28,21 @@ function isTextMessage(
 ): ctx is Context & { message: { text: string } } {
   return !!ctx.message && typeof (ctx.message as any).text === "string";
 }
+async function handleAdminText(ctx: Context, state: AdminState) {
+  const msg = ctx.message;
+  if (!msg || !("text" in msg)) return;
+
+  switch (msg.text) {
+    case "📥 View Orders":
+      // your logic here
+      break;
+    case "➕ Add Restaurant":
+      // your logic here
+      break;
+    default:
+      await ctx.reply("⚠️ Unknown admin command.");
+  }
+}
 
 function adminMainKeyboard() {
   return Markup.inlineKeyboard(

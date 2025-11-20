@@ -479,6 +479,7 @@ export function handleUserFlow(
 
       await supabase.from("orders").insert([
         {
+          id: uuidv4(),
           user_name: state.name,
           phone: state.phone,
           campus: state.campus,
@@ -494,20 +495,25 @@ export function handleUserFlow(
       if (!state.campus) {
         return ctx.reply("⚠️ Campus not selected yet.");
       }
-      const { data: lastOrder, error: lastOrderError } = await supabase
+      const { data: lastOrder, error } = await supabase
         .from("orders")
         .select("id")
         .eq("telegram_id", userId)
         .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
+        .maybeSingle();
 
-      const orderId = lastOrder?.id;
+      if (error) {
+        console.error("Supabase error:", error);
+        return ctx.reply("❌ Error while fetching order.");
+      }
 
-      if (!orderId) {
-        console.error("Cannot find the inserted order ID", lastOrderError);
+      if (!lastOrder || lastOrder.id === undefined || lastOrder.id === null) {
+        console.error("❌ Order not found:", lastOrder);
         return ctx.reply("❌ Could not find your order. Try again.");
       }
+
+      const orderId = Number(lastOrder.id);
+      console.log("Order ID:", orderId);
 
       const campusNormalized = state.campus
         .toLowerCase()

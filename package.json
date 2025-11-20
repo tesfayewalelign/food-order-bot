@@ -1,7 +1,7 @@
 {
   "name": "food-delivery-bot",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -15,8 +15,6 @@
   "devDependencies": {
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.0",
-    "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
