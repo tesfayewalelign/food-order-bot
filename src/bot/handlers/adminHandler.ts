@@ -19,7 +19,6 @@ interface AdminState {
 
 const adminStates = new Map<number, AdminState>();
 
-// Helper to generate 4-digit secret code
 function generateSecretCode(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
@@ -53,6 +52,14 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       parse_mode: "Markdown",
       ...adminMainKeyboard(),
     });
+  });
+  bot.on("text", async (ctx, next) => {
+    const adminId = ctx.from?.id;
+    if (!adminId || !ADMIN_IDS.includes(adminId)) return next();
+    const state = adminStates.get(adminId);
+    if (!state) return next();
+    await handleAdminText(ctx, state);
+    adminStates.delete(adminId);
   });
 
   bot.action("admin_back", async (ctx) => {
@@ -469,13 +476,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       return ctx.answerCbQuery("⚠️ Request not found", { show_alert: true });
 
     await ctx.reply(
-      `📄 *Contract Request*\n\n` +
-        `👤 Name: *${r.user_name}*\n` +
-        `📱 Phone: *${r.phone}*\n` +
-        `📅 Start: *${r.start_date}*\n` +
-        `📅 End: *${r.end_date}*\n` +
-        `🆔 User ID: *${r.telegram_id}*\n` +
-        `📌 Status: *${r.status}*`,
+      "Please approve or reject the contract request:", // message text
       {
         parse_mode: "Markdown",
         reply_markup: Markup.inlineKeyboard([
@@ -492,7 +493,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
             ),
           ],
           [Markup.button.callback("🔙 Back", "admin_contract_requests")],
-        ]).reply_markup, // ✔ FIX: extract only the reply_markup
+        ]).reply_markup, // <-- use .reply_markup here
       }
     );
   });

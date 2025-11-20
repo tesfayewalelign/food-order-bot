@@ -184,3 +184,10 @@ export async function getAdminFoodKeyboard(restaurantId: string) {
 
   return { reply_markup: { inline_keyboard: buttons } };
 }
+const riderOrderKeyboard = (orderId: number) =>
+  Markup.inlineKeyboard([
+    [
+      Markup.button.callback(`✅ Approve`, `rider_order_approve_${orderId}`),
+      Markup.button.callback(`❌ Reject`, `rider_order_reject_${orderId}`),
+    ],
+  ]);

@@ -7,6 +7,7 @@ import {
   getRestaurantKeyboard,
   getFoodKeyboard,
 } from "../../helpers/keyboards.js";
+import { v4 as uuidv4 } from "uuid";
 
 function isTextMessage(msg: any): msg is { text: string } {
   return msg && typeof msg.text === "string";
@@ -66,18 +67,12 @@ export function handleUserFlow(
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    // ----------------------------
-    // Role-based check
-    // ----------------------------
-    if (ADMIN_IDS.includes(userId)) return; // Admin handler will handle
-    if (DRIVER_IDS.includes(userId)) return; // Driver handler will handle
+    if (ADMIN_IDS.includes(userId)) return;
+    if (DRIVER_IDS.includes(userId)) return;
 
     const msg = ctx.message;
     if (!msg) return;
 
-    // ----------------------------
-    // Initialize user state
-    // ----------------------------
     let state = userState.get(userId);
     if (!state) {
       const { data: profile } = await supabase
@@ -89,9 +84,6 @@ export function handleUserFlow(
       state = await initUserState(userId, profile);
     }
 
-    // ----------------------------
-    // Profile registration steps
-    // ----------------------------
     if (state.step === "profile_ask_name" && isTextMessage(msg)) {
       state.name = msg.text;
       state.step = "profile_ask_phone";
@@ -131,9 +123,6 @@ export function handleUserFlow(
       });
     }
 
-    // ----------------------------
-    // Main menu buttons (always active)
-    // ----------------------------
     if (isTextMessage(msg)) {
       switch (msg.text) {
         case "🍔 Order Food":
@@ -322,7 +311,6 @@ export function handleUserFlow(
   bot.action("request_contract", async (ctx) => {
     const userId = ctx.from!.id;
 
-    // 1️⃣ Fetch user profile from your DB
     const { data: profile, error } = await supabase
       .from("profiles")
       .select("name, phone")
@@ -333,7 +321,6 @@ export function handleUserFlow(
       console.error(error);
     }
 
-    // Fallbacks if DB does not have values
     const fullName =
       profile?.name ||
       `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
@@ -348,7 +335,6 @@ export function handleUserFlow(
       status: "pending",
     });
 
-    // 3️⃣ Notify all admins using NAME + PHONE from DB
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
         adminId,
@@ -361,7 +347,6 @@ export function handleUserFlow(
       );
     }
 
-    // 4️⃣ Continue order UX
     await ctx.editMessageText(
       "📥 Your contract request has been sent!\n\n" +
         "Admin will review it soon.\n" +
@@ -451,6 +436,7 @@ export function handleUserFlow(
       0
     );
     const totalPrice = subtotal + deliveryFee;
+
     const foodsList = state.foods
       .map((f) => `${f.name} x${f.quantity}`)
       .join(", ");
@@ -508,6 +494,20 @@ export function handleUserFlow(
       if (!state.campus) {
         return ctx.reply("⚠️ Campus not selected yet.");
       }
+      const { data: lastOrder, error: lastOrderError } = await supabase
+        .from("orders")
+        .select("id")
+        .eq("telegram_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      const orderId = lastOrder?.id;
+
+      if (!orderId) {
+        console.error("Cannot find the inserted order ID", lastOrderError);
+        return ctx.reply("❌ Could not find your order. Try again.");
+      }
 
       const campusNormalized = state.campus
         .toLowerCase()
@@ -531,20 +531,33 @@ export function handleUserFlow(
             await ctx.telegram.sendMessage(
               r.telegram_id,
               `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞 ${state.phone}\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}`,
-              { parse_mode: "Markdown" }
+              {
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "✅ Approve",
+                        callback_data: `rider_order_approve_${orderId}`,
+                      },
+                    ],
+                    [
+                      {
+                        text: "❌ Reject",
+                        callback_data: `rider_order_reject_${orderId}`,
+                      },
+                    ],
+                  ],
+                },
+              }
             );
           }
         }
-      } else {
-        console.warn(`No active riders found for campus: ${state.campus}`);
       }
-
       resetUserState(userId);
-
       await ctx.editMessageText(
         "✅ Order placed successfully! The restaurant is preparing your food. You will be notified when a rider picks it up."
       );
-
       return ctx.answerCbQuery();
     } catch (err) {
       console.error("Confirm order error:", err);

@@ -48,9 +48,9 @@ export async function initUserState(userId: number, profile: any | null) {
   const state: UserState = {
     step: profile ? "idle" : "profile_ask_name",
 
-    name: profile?.name,
-    phone: profile?.phone,
-    campus: profile?.campus,
+    name: profile?.name ?? null,
+    phone: profile?.phone ?? null,
+    campus: profile?.campus ?? null,
 
     foods: [],
     cartFoods: [],

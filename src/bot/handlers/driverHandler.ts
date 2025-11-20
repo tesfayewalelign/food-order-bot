@@ -1,6 +1,11 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../../config/supabase.js";
 
+const ADMIN_IDS: number[] = (process.env.ADMIN_TELEGRAM_IDS || "")
+  .split(",")
+  .map((id) => Number(id))
+  .filter((id) => !isNaN(id));
+
 function isTextMessage(
   ctx: Context
 ): ctx is Context & { message: { text: string } } {
@@ -11,10 +16,7 @@ function isTextMessage(
   );
 }
 
-export function setupDriverHandler(
-  bot: Telegraf<Context>,
-  DRIVER_IDS: number[]
-) {
+export function setupDriverHandler(bot: Telegraf<Context>) {
   // ---------------- /start ----------------
   bot.start(async (ctx) => {
     const userId = ctx.from?.id;
@@ -176,5 +178,73 @@ export function setupDriverHandler(
 /accept <order-id>
 /reject <order-id>`
     );
+  });
+
+  // Rider approves order
+  bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
+    const orderUserId = ctx.match[1];
+
+    // Update order status in DB
+    const { data: order, error } = await supabase
+      .from("orders")
+      .update({ status: "approved", rider_id: ctx.from!.id })
+      .eq("telegram_id", orderUserId)
+      .select()
+      .single();
+
+    if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
+
+    // Notify user
+    if (order.telegram_id) {
+      await ctx.telegram.sendMessage(
+        order.telegram_id,
+        `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
+      );
+    }
+
+    // Notify admins
+    for (const adminId of ADMIN_IDS) {
+      await ctx.telegram.sendMessage(
+        adminId,
+        `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    await ctx.answerCbQuery("Order approved!");
+    await ctx.editMessageReplyMarkup(undefined);
+  });
+
+  bot.action(/rider_order_reject_(\d+)/, async (ctx) => {
+    const orderUserId = ctx.match[1];
+
+    const { data: order, error } = await supabase
+      .from("orders")
+      .update({ status: "rejected" })
+      .eq("telegram_id", orderUserId)
+      .select()
+      .single();
+
+    if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
+
+    // Notify user
+    if (order.telegram_id) {
+      await ctx.telegram.sendMessage(
+        order.telegram_id,
+        `❌ Your order was rejected by rider ${ctx.from?.first_name}`
+      );
+    }
+
+    // Notify admins
+    for (const adminId of ADMIN_IDS) {
+      await ctx.telegram.sendMessage(
+        adminId,
+        `❌ Rider *${ctx.from?.first_name}* rejected order of ${order.user_name}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    await ctx.answerCbQuery("Order rejected");
+    await ctx.editMessageReplyMarkup(undefined); // remove buttons
   });
 }
