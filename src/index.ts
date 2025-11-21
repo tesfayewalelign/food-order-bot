@@ -1,14 +1,12 @@
 import { Telegraf } from "telegraf";
 import dotenv from "dotenv";
-import express, { Request, Response } from "express";
 
 dotenv.config();
 
-import { supabase } from "./config/supabase";
-import { setupAdminHandler } from "./bot/handlers/adminHandler";
-import { setupDriverHandler } from "./bot/handlers/driverHandler";
-import { setupStartHandler } from "./bot/handlers/startHandler";
-import { handleUserFlow } from "./bot/handlers/userHandler";
+import { setupAdminHandler } from "./bot/handlers/adminHandler.js";
+import { setupDriverHandler } from "./bot/handlers/driverHandler.js";
+import { setupStartHandler } from "./bot/handlers/startHandler.js";
+import { handleUserFlow } from "./bot/handlers/userHandler.js";
 export const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
   .map((id) => Number(id.trim()))
