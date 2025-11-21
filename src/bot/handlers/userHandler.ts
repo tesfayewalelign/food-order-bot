@@ -479,7 +479,6 @@ export function handleUserFlow(
 
       await supabase.from("orders").insert([
         {
-          id: uuidv4(),
           user_name: state.name,
           phone: state.phone,
           campus: state.campus,

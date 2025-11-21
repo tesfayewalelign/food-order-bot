@@ -9,7 +9,6 @@ export function isAdmin(userId: number): boolean {
   return ADMIN_IDS.includes(String(userId));
 }
 
-// ─── Get User by Phone ─────────────────────────
 export async function getUserByPhone(phone: string): Promise<User | null> {
   const { data, error } = await supabase
     .from("users")
@@ -21,10 +20,8 @@ export async function getUserByPhone(phone: string): Promise<User | null> {
   return data as User | null;
 }
 
-// ─── Type for New User ─────────────────────────
 export type NewUser = Omit<User, "id" | "created_at">;
 
-// ─── Create User ───────────────────────────────
 export async function createUser(userData: NewUser): Promise<User> {
   const { data, error } = await supabase
     .from("users")
@@ -41,7 +38,6 @@ export async function upsertUserByTelegramId(
   state: Partial<NewUser & { deliveryType?: "new" | "contract" }>
 ): Promise<User | null> {
   try {
-    // Prepare data for upsert
     const userData: Partial<User> = {
       telegram_id,
       phone: state.phone!,
@@ -52,10 +48,9 @@ export async function upsertUserByTelegramId(
         state.deliveryType === "contract" ? 30 : state.contract_count ?? 0,
     };
 
-    // Upsert user
     const { data, error } = await supabase
       .from("users")
-      .upsert(userData, { onConflict: "telegram_id" }) // avoid duplicate key error
+      .upsert(userData, { onConflict: "telegram_id" })
       .select("*")
       .maybeSingle();
 
@@ -67,7 +62,7 @@ export async function upsertUserByTelegramId(
     return null;
   }
 }
-// ─── Update User ───────────────────────────────
+
 export async function updateUser(
   phone: string,
   updates: Partial<Omit<User, "id" | "created_at">>
@@ -83,7 +78,6 @@ export async function updateUser(
   return data as User;
 }
 
-// ─── Decrement Contract Count ──────────────────
 export async function decrementContract(
   phone: string
 ): Promise<number | false> {
@@ -109,7 +103,6 @@ export async function decrementContract(
   return newCount;
 }
 
-// ─── Reset Contract Count ──────────────────────
 export async function resetContract(phone: string, count = 30): Promise<void> {
   await supabase
     .from("users")

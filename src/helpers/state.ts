@@ -3,6 +3,16 @@ export interface FoodItem {
   quantity: number;
   price: number;
 }
+export interface User {
+  id: number;
+  telegram_id: number | null;
+  phone: string;
+  name: string | null;
+  campus: string | null;
+  is_contract: boolean;
+  contract_count: number;
+  created_at: string; // or Date
+}
 
 export interface UserState {
   step:

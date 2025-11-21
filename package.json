@@ -2,7 +2,6 @@
   "name": "food-delivery-bot",
   "version": "1.0.0",
   "main": "dist/index.js",
- 
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
