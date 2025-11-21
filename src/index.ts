@@ -1,12 +1,25 @@
 import { Telegraf } from "telegraf";
 import dotenv from "dotenv";
+import express from "express";
 
 dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("🤖 Bot is running!");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Express server listening on port ${PORT}`);
+});
 
 import { setupAdminHandler } from "./bot/handlers/adminHandler.js";
 import { setupDriverHandler } from "./bot/handlers/driverHandler.js";
 import { setupStartHandler } from "./bot/handlers/startHandler.js";
 import { handleUserFlow } from "./bot/handlers/userHandler.js";
+
 export const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
   .map((id) => Number(id.trim()))
