@@ -64,114 +64,122 @@ export function handleUserFlow(
   DRIVER_IDS: number[]
 ) {
   bot.on("message", async (ctx) => {
-    const userId = ctx.from?.id;
-    if (!userId) return;
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) return;
 
-    if (ADMIN_IDS.includes(userId)) return;
-    if (DRIVER_IDS.includes(userId)) return;
+      if (ADMIN_IDS.includes(userId) || DRIVER_IDS.includes(userId)) return;
 
-    const msg = ctx.message;
-    if (!msg) return;
+      const msg = ctx.message;
+      if (!msg) return;
 
-    let state = userState.get(userId);
-    if (!state) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("telegram_id", userId)
-        .maybeSingle();
+      let state = userState.get(userId);
+      if (!state) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("telegram_id", userId)
+          .maybeSingle();
 
-      state = await initUserState(userId, profile);
-    }
-
-    if (state.step === "profile_ask_name" && isTextMessage(msg)) {
-      state.name = msg.text;
-      state.step = "profile_ask_phone";
-      userState.set(userId, state);
-
-      return ctx.reply(
-        "📞 Please share your phone number:",
-        Markup.keyboard([
-          Markup.button.contactRequest("📱 Share Phone"),
-        ]).resize()
-      );
-    }
-
-    if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
-      state.phone = msg.contact.phone_number;
-      state.step = "profile_ask_campus";
-      userState.set(userId, state);
-
-      return ctx.reply("🏫 Select your campus:", campusKeyboard);
-    }
-
-    if (state.step === "waiting_for_quantity" && isTextMessage(msg)) {
-      const quantity = Number(msg.text);
-      if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
-        return ctx.reply("⚠️ Enter a valid whole number.");
-
-      state.foods.push({
-        name: state.currentFood!,
-        quantity,
-        price: state.currentFoodPrice!,
-      });
-
-      state.currentFood = undefined;
-      state.currentFoodPrice = undefined;
-
-      if (!state.restaurantId) return ctx.reply("⚠️ No restaurant selected.");
-
-      const keyboard = await getFoodKeyboard(state.restaurantId);
-      return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
-        reply_markup: keyboard?.reply_markup,
-      });
-    }
-
-    if (isTextMessage(msg)) {
-      switch (msg.text) {
-        case "🍔 Order Food":
-          state.step = "profile_ask_campus";
-          return ctx.reply("🍔 Choose your campus:", campusKeyboard);
-
-        case "📦 My Orders":
-          const { data: orders } = await supabase
-            .from("orders")
-            .select("*")
-            .eq("telegram_id", userId)
-            .order("id", { ascending: false });
-
-          if (!orders || orders.length === 0)
-            return ctx.reply("📂 You have no orders yet.");
-
-          const ordersList = orders
-            .map(
-              (o) =>
-                `• 🆔 Order #${o.id}\n  🍽 ${o.restaurant}\n  💰 Total: ${o.total} ETB\n  📦 Status: ${o.status}`
-            )
-            .join("\n\n");
-
-          return ctx.reply(`📂 Your Orders:\n\n${ordersList}`);
-
-        case "ℹ️ Help":
-          return ctx.reply(
-            "📝 Help Menu:\n" +
-              "• 🍔 Order Food → Start a new order\n" +
-              "• 📦 My Orders → View past orders\n" +
-              "• 🏠 Main Menu → Return to main menu\n" +
-              "• /start → Restart the bot anytime"
-          );
-
-        case "🏠 Main Menu":
-          resetUserState(userId);
-          state.step = "idle";
-          return ctx.reply("🏠 Main Menu:", getMainMenuKeyboard(false, false));
-
-        default:
-          return ctx.reply(
-            "🤔 Command not recognized. Use the buttons below or /start to restart.",
-            getMainMenuKeyboard(false, false)
-          );
+        state = await initUserState(userId, profile);
       }
+
+      if (state.step === "profile_ask_name" && isTextMessage(msg)) {
+        state.name = msg.text;
+        state.step = "profile_ask_phone";
+        userState.set(userId, state);
+
+        return ctx.reply(
+          "📞 Please share your phone number:",
+          Markup.keyboard([
+            Markup.button.contactRequest("📱 Share Phone"),
+          ]).resize()
+        );
+      }
+
+      if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
+        state.phone = msg.contact.phone_number;
+        state.step = "profile_ask_campus";
+        userState.set(userId, state);
+
+        return ctx.reply("🏫 Select your campus:", campusKeyboard);
+      }
+
+      if (state.step === "waiting_for_quantity" && isTextMessage(msg)) {
+        const quantity = Number(msg.text);
+        if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
+          return ctx.reply("⚠️ Enter a valid whole number.");
+
+        state.foods.push({
+          name: state.currentFood!,
+          quantity,
+          price: state.currentFoodPrice!,
+        });
+
+        state.currentFood = undefined;
+        state.currentFoodPrice = undefined;
+
+        if (!state.restaurantId) return ctx.reply("⚠️ No restaurant selected.");
+
+        const keyboard = await getFoodKeyboard(state.restaurantId);
+        return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
+          reply_markup: keyboard?.reply_markup,
+        });
+      }
+
+      if (isTextMessage(msg)) {
+        switch (msg.text) {
+          case "🍔 Order Food":
+            state.step = "profile_ask_campus";
+            return ctx.reply("🍔 Choose your campus:", campusKeyboard);
+
+          case "📦 My Orders":
+            const { data: orders } = await supabase
+              .from("orders")
+              .select("*")
+              .eq("telegram_id", userId)
+              .order("id", { ascending: false });
+
+            if (!orders || orders.length === 0)
+              return ctx.reply("📂 You have no orders yet.");
+
+            const ordersList = orders
+              .map(
+                (o) =>
+                  `• 🆔 Order #${o.id}\n  🍽 ${o.restaurant}\n  💰 Total: ${o.total} ETB\n  📦 Status: ${o.status}`
+              )
+              .join("\n\n");
+
+            return ctx.reply(`📂 Your Orders:\n\n${ordersList}`);
+
+          case "ℹ️ Help":
+            return ctx.reply(
+              "📝 Help Menu:\n" +
+                "• 🍔 Order Food → Start a new order\n" +
+                "• 📦 My Orders → View past orders\n" +
+                "• 🏠 Main Menu → Return to main menu\n" +
+                "• /start → Restart the bot anytime"
+            );
+
+          case "🏠 Main Menu":
+            resetUserState(userId);
+            state.step = "idle";
+            return ctx.reply(
+              "🏠 Main Menu:",
+              getMainMenuKeyboard(false, false)
+            );
+
+          default:
+            return ctx.reply(
+              "🤔 Command not recognized. Use the buttons below or /start to restart.",
+              getMainMenuKeyboard(false, false)
+            );
+        }
+      }
+    } catch (err) {
+      console.error("User message handler error:", err);
+
+      return ctx.reply("⚠️ Something went wrong. Please try again.");
     }
   });
 
