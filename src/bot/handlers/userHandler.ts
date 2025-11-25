@@ -87,6 +87,8 @@ export function handleUserFlow(
     if (state.step === "profile_ask_name" && isTextMessage(msg)) {
       state.name = msg.text;
       state.step = "profile_ask_phone";
+      userState.set(userId, state);
+
       return ctx.reply(
         "📞 Please share your phone number:",
         Markup.keyboard([
@@ -98,6 +100,8 @@ export function handleUserFlow(
     if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
       state.phone = msg.contact.phone_number;
       state.step = "profile_ask_campus";
+      userState.set(userId, state);
+
       return ctx.reply("🏫 Select your campus:", campusKeyboard);
     }
 
@@ -399,6 +403,18 @@ export function handleUserFlow(
         ? `📦 Remaining Contract Orders: ${contract.remaining_orders}`
         : "⚠️ Contract status unknown.";
     }
+    if (!state.name || !state.phone) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("name, phone")
+        .eq("telegram_id", userId)
+        .maybeSingle();
+
+      if (profile) {
+        state.name = profile.name;
+        state.phone = profile.phone;
+      }
+    }
 
     await ctx.editMessageText(
       `🧾 *Order Summary*\n\n👤 ${state.name || "N/A"}\n📞 ${
@@ -477,41 +493,34 @@ export function handleUserFlow(
         }
       }
 
-      await supabase.from("orders").insert([
-        {
-          user_name: state.name,
-          phone: state.phone,
-          campus: state.campus,
-          restaurant: state.restaurant,
-          foods: foodsList,
-          total: totalPrice,
-          delivery_type: state.deliveryType,
-          telegram_id: userId,
-          status: "pending",
-        },
-      ]);
-
       if (!state.campus) {
         return ctx.reply("⚠️ Campus not selected yet.");
       }
-      const { data: lastOrder, error } = await supabase
+      const { data: insertedOrder, error: insertError } = await supabase
         .from("orders")
+        .insert([
+          {
+            user_name: state.name,
+            phone: state.phone,
+            campus: state.campus,
+            restaurant: state.restaurant,
+            foods: foodsList,
+            total: totalPrice,
+            delivery_type: state.deliveryType,
+            telegram_id: userId,
+            status: "pending",
+          },
+        ])
         .select("id")
-        .eq("telegram_id", userId)
-        .order("created_at", { ascending: false })
-        .maybeSingle();
+        .single();
 
-      if (error) {
-        console.error("Supabase error:", error);
-        return ctx.reply("❌ Error while fetching order.");
+      if (insertError || !insertedOrder) {
+        console.error("Insert error:", insertError);
+        return ctx.reply("❌ Order could not be saved.");
       }
 
-      if (!lastOrder || lastOrder.id === undefined || lastOrder.id === null) {
-        console.error("❌ Order not found:", lastOrder);
-        return ctx.reply("❌ Could not find your order. Try again.");
-      }
+      const orderId = insertedOrder.id;
 
-      const orderId = Number(lastOrder.id);
       console.log("Order ID:", orderId);
 
       const campusNormalized = state.campus
