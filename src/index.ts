@@ -7,14 +7,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("🤖 Bot is running!");
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Express server listening on port ${PORT}`);
-});
-
 import { setupAdminHandler } from "./bot/handlers/adminHandler.js";
 import { setupDriverHandler } from "./bot/handlers/driverHandler.js";
 import { setupStartHandler } from "./bot/handlers/startHandler.js";
@@ -37,15 +29,33 @@ if (!process.env.BOT_TOKEN) {
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
+// ✅ setup bot handlers
 setupStartHandler(bot, ADMIN_IDS);
 handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS);
 setupAdminHandler(bot, ADMIN_IDS);
 setupDriverHandler(bot);
 
-bot
-  .launch()
-  .then(() => console.log("🤖 Bot is running successfully..."))
-  .catch((err) => console.error("❌ Failed to launch bot:", err));
+// ✅ Webhook setup for Render
+const WEBHOOK_URL = `https://food-order-bot-6f0w.onrender.com/webhook`;
+
+app.use(express.json());
+app.use(bot.webhookCallback("/webhook"));
+
+app.get("/", (req, res) => {
+  res.send("🤖 Bot is running via webhook!");
+});
+
+// ✅ Set webhook when server starts
+app.listen(PORT, async () => {
+  console.log(`🌐 Server running on port ${PORT}`);
+
+  try {
+    await bot.telegram.setWebhook(WEBHOOK_URL);
+    console.log("✅ Webhook set:", WEBHOOK_URL);
+  } catch (err) {
+    console.error("❌ Failed to set webhook:", err);
+  }
+});
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
