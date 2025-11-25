@@ -71,7 +71,9 @@ export function handleUserFlow(
       if (ADMIN_IDS.includes(userId) || DRIVER_IDS.includes(userId)) return;
 
       const msg = ctx.message;
-      if (!msg) return;
+      if (!msg || !("text" in msg || "contact" in msg)) return;
+
+      if ("text" in msg && msg.text.startsWith("/")) return;
 
       let state = userState.get(userId);
       if (!state) {
@@ -182,7 +184,6 @@ export function handleUserFlow(
       return ctx.reply("⚠️ Something went wrong. Please try again.");
     }
   });
-
   bot.action(/^campus_(.+)/, async (ctx) => {
     const data = getCallbackData(ctx);
     if (!data) return ctx.answerCbQuery();
