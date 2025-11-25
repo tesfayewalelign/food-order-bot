@@ -544,7 +544,8 @@ export function handleUserFlow(
           if (r.telegram_id) {
             await ctx.telegram.sendMessage(
               r.telegram_id,
-              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞 ${state.phone}\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}`,
+              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞[${state.phone}](tel:${state.phone})\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}`,
+
               {
                 parse_mode: "Markdown",
                 reply_markup: {

@@ -16,7 +16,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       resetUserState(userId);
 
-      // --- Fetch user profile from Supabase ---
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("name, phone, telegram_id")
@@ -24,7 +23,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         .maybeSingle();
       if (profileError) console.error(profileError);
 
-      // --- Check if the user is a rider ---
       const { data: riderCheck, error: riderError } = await supabase
         .from("riders")
         .select("*")
@@ -33,14 +31,12 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       if (riderError) console.error(riderError);
 
       if (riderCheck) {
-        // Rider already activated
         return ctx.reply(
           `🛵 Welcome Rider ${profile?.name || "Rider"}!`,
           getMainMenuKeyboard(false, true)
         );
       }
 
-      // --- Prepare welcome message for normal user ---
       const welcomeMessage = profile
         ? `👋 Welcome back ${profile.name}!\n\n🍽️ Campus Food Delivery - Hawassa University!\nWe bring delicious meals from nearby restaurants straight to your campus.\n\n✅ Fast & reliable delivery\n✅ Affordable prices for students\n✅ Fresh and hygienic food\n\nUse /order to start your meal or /help for assistance.`
         : `👋 Welcome to Hawassa University Campus Food Delivery!\n\n🍽️ Get fresh meals delivered straight to your campus gate.\n✅ Fast delivery in just minutes\n✅ Affordable student-friendly prices\n✅ Wide selection of tasty meals from local restaurants\n\nPlease share your full name and phone number to get started.`;
@@ -56,9 +52,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
   });
 
-  // =========================
-  // ACTIVATE COMMAND FOR RIDERS
-  // =========================
   bot.command("activate", async (ctx) => {
     const text = ctx.message?.text ?? "";
     const parts = text.split(" ");
@@ -73,7 +66,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     try {
       console.log("Activation code received:", code);
 
-      // Find rider by secret_code
       const { data: rider, error } = await supabase
         .from("riders")
         .select("*")
@@ -85,7 +77,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         return ctx.reply("❌ Rider not found. Please check your code.");
       }
 
-      // Update rider with their Telegram ID
       await supabase
         .from("riders")
         .update({ telegram_id: ctx.from!.id })

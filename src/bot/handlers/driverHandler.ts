@@ -169,7 +169,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     ctx.reply(`❌ Order #${orderId} rejected.`);
   });
 
-  // ---------------- /rider_help ----------------
   bot.command("rider_help", (ctx) => {
     ctx.reply(
       `🛵 Rider Commands:
@@ -180,21 +179,18 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     );
   });
 
-  // Rider approves order
   bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
     const orderUserId = ctx.match[1];
 
-    // Update order status in DB
     const { data: order, error } = await supabase
       .from("orders")
       .update({ status: "approved", rider_id: ctx.from!.id })
-      .eq("telegram_id", orderUserId)
+      .eq("id", orderUserId)
       .select()
       .single();
 
     if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
 
-    // Notify user
     if (order.telegram_id) {
       await ctx.telegram.sendMessage(
         order.telegram_id,
@@ -202,7 +198,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       );
     }
 
-    // Notify admins
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
         adminId,
@@ -221,13 +216,12 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     const { data: order, error } = await supabase
       .from("orders")
       .update({ status: "rejected" })
-      .eq("telegram_id", orderUserId)
+      .eq("id", orderUserId)
       .select()
       .single();
 
     if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
 
-    // Notify user
     if (order.telegram_id) {
       await ctx.telegram.sendMessage(
         order.telegram_id,
@@ -235,7 +229,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       );
     }
 
-    // Notify admins
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
         adminId,
@@ -245,6 +238,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     }
 
     await ctx.answerCbQuery("Order rejected");
-    await ctx.editMessageReplyMarkup(undefined); // remove buttons
+    await ctx.editMessageReplyMarkup(undefined);
   });
 }

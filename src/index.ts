@@ -29,13 +29,11 @@ if (!process.env.BOT_TOKEN) {
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// ✅ setup bot handlers
 setupStartHandler(bot, ADMIN_IDS);
-handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS);
 setupAdminHandler(bot, ADMIN_IDS);
 setupDriverHandler(bot);
+handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS);
 
-// ✅ Webhook setup for Render
 const WEBHOOK_URL = `https://food-order-bot-6f0w.onrender.com/webhook`;
 
 app.use(express.json());
@@ -45,7 +43,6 @@ app.get("/", (req, res) => {
   res.send("🤖 Bot is running via webhook!");
 });
 
-// ✅ Set webhook when server starts
 app.listen(PORT, async () => {
   console.log(`🌐 Server running on port ${PORT}`);
 
