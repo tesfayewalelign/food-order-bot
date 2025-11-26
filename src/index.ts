@@ -37,11 +37,6 @@ handleUserFlow(bot, ADMIN_IDS, DRIVER_IDS);
 const WEBHOOK_URL = `https://food-order-bot-6f0w.onrender.com/webhook`;
 
 app.use(express.json());
-bot.on("message", (ctx, next) => {
-  console.log("✅ Incoming message:", ctx.message?.text);
-  return next();
-});
-
 app.use(bot.webhookCallback("/webhook"));
 
 app.get("/", (req, res) => {
