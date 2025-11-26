@@ -180,9 +180,18 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
   bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
     const orderUserId = ctx.match[1];
 
+    const { data: rider, error: riderError } = await supabase
+      .from("riders")
+      .select("id, name")
+      .eq("telegram_id", ctx.from!.id)
+      .single();
+
+    if (riderError || !rider)
+      return ctx.answerCbQuery("❌ Rider not found in database");
+
     const { data: order, error } = await supabase
       .from("orders")
-      .update({ status: "approved", assigned_rider: ctx.from!.id })
+      .update({ status: "approved", assigned_rider: rider.id })
       .eq("id", orderUserId)
       .select()
       .single();
