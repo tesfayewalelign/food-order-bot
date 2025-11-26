@@ -39,14 +39,12 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
         ]).resize()
       );
     } else {
-      // Rider not activated yet
       return ctx.reply(
         "🛵 Welcome Rider!\nPlease activate your account with the code sent by admin:\n/activate <4-digit-code>"
       );
     }
   });
 
-  // ---------------- /activate ----------------
   bot.command("activate", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
@@ -179,65 +177,83 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     );
   });
 
+  // Approve Order
   bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
-    const orderUserId = ctx.match[1];
+    const orderId = Number(ctx.match[1]);
+    if (isNaN(orderId)) return ctx.answerCbQuery("❌ Invalid order ID");
 
-    const { data: order, error } = await supabase
-      .from("orders")
-      .update({ status: "approved", rider_id: ctx.from!.id })
-      .eq("id", orderUserId)
-      .select()
-      .single();
+    try {
+      const { data: order, error } = await supabase
+        .from("orders")
+        .update({ status: "approved", rider_id: ctx.from!.id })
+        .eq("id", orderId)
+        .select()
+        .single();
 
-    if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
+      if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
 
-    if (order.telegram_id) {
-      await ctx.telegram.sendMessage(
-        order.telegram_id,
-        `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
-      );
+      // Notify the user
+      if (order.telegram_id) {
+        await ctx.telegram.sendMessage(
+          order.telegram_id,
+          `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
+        );
+      }
+
+      // Notify all admins
+      for (const adminId of ADMIN_IDS) {
+        await ctx.telegram.sendMessage(
+          adminId,
+          `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      await ctx.answerCbQuery("✅ Order approved!");
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (err) {
+      console.error("[RIDER] Approve order error:", err);
+      await ctx.answerCbQuery("❌ Error approving order");
     }
-
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    await ctx.answerCbQuery("Order approved!");
-    await ctx.editMessageReplyMarkup(undefined);
   });
 
+  // Reject Order
   bot.action(/rider_order_reject_(\d+)/, async (ctx) => {
-    const orderUserId = ctx.match[1];
+    const orderId = Number(ctx.match[1]);
+    if (isNaN(orderId)) return ctx.answerCbQuery("❌ Invalid order ID");
 
-    const { data: order, error } = await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", orderUserId)
-      .select()
-      .single();
+    try {
+      const { data: order, error } = await supabase
+        .from("orders")
+        .update({ status: "rejected" })
+        .eq("id", orderId)
+        .select()
+        .single();
 
-    if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
+      if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
 
-    if (order.telegram_id) {
-      await ctx.telegram.sendMessage(
-        order.telegram_id,
-        `❌ Your order was rejected by rider ${ctx.from?.first_name}`
-      );
+      // Notify the user
+      if (order.telegram_id) {
+        await ctx.telegram.sendMessage(
+          order.telegram_id,
+          `❌ Your order was rejected by rider ${ctx.from?.first_name}`
+        );
+      }
+
+      // Notify all admins
+      for (const adminId of ADMIN_IDS) {
+        await ctx.telegram.sendMessage(
+          adminId,
+          `❌ Rider *${ctx.from?.first_name}* rejected order of ${order.user_name}`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      await ctx.answerCbQuery("✅ Order rejected");
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (err) {
+      console.error("[RIDER] Reject order error:", err);
+      await ctx.answerCbQuery("❌ Error rejecting order");
     }
-
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `❌ Rider *${ctx.from?.first_name}* rejected order of ${order.user_name}`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    await ctx.answerCbQuery("Order rejected");
-    await ctx.editMessageReplyMarkup(undefined);
   });
 }
