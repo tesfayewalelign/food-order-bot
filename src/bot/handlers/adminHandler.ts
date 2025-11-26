@@ -128,6 +128,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     } finally {
       adminStates.delete(adminId);
     }
+    await next();
   });
 
   // ---------------- BACK BUTTON ----------------
