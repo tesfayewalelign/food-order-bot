@@ -178,40 +178,34 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
   });
 
   bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
-    const orderId = Number(ctx.match[1]); // Convert string to number
-    if (isNaN(orderId)) return ctx.answerCbQuery("❌ Invalid order ID");
+    const orderUserId = ctx.match[1];
 
-    try {
-      const { data: order, error } = await supabase
-        .from("orders")
-        .update({ status: "approved", rider_id: ctx.from!.id })
-        .eq("id", orderId)
-        .select()
-        .single();
+    const { data: order, error } = await supabase
+      .from("orders")
+      .update({ status: "approved", assigned_rider: ctx.from!.id })
+      .eq("id", orderUserId)
+      .select()
+      .single();
 
-      if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
+    if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
 
-      if (order.telegram_id) {
-        await ctx.telegram.sendMessage(
-          order.telegram_id,
-          `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
-        );
-      }
-
-      for (const adminId of ADMIN_IDS) {
-        await ctx.telegram.sendMessage(
-          adminId,
-          `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
-          { parse_mode: "Markdown" }
-        );
-      }
-
-      await ctx.answerCbQuery("✅ Order approved!");
-      await ctx.editMessageReplyMarkup(undefined);
-    } catch (err) {
-      console.error("[RIDER] Approve order error:", err);
-      await ctx.answerCbQuery("❌ Error approving order");
+    if (order.telegram_id) {
+      await ctx.telegram.sendMessage(
+        order.telegram_id,
+        `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
+      );
     }
+
+    for (const adminId of ADMIN_IDS) {
+      await ctx.telegram.sendMessage(
+        adminId,
+        `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    await ctx.answerCbQuery("Order approved!");
+    await ctx.editMessageReplyMarkup(undefined);
   });
 
   bot.action(/rider_order_reject_(\d+)/, async (ctx) => {
