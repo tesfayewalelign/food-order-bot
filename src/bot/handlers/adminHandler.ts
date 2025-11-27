@@ -45,7 +45,6 @@ function adminMainKeyboard() {
 }
 
 export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
-  // ---------------- /admin command ----------------
   bot.command("admin", async (ctx) => {
     const id = ctx.from?.id;
     if (!id || !ADMIN_IDS.includes(id)) return ctx.reply("🚫 Not authorized.");
@@ -55,7 +54,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     });
   });
 
-  // ---------------- Global text listener ----------------
   bot.on("text", async (ctx, next) => {
     const adminId = ctx.from?.id;
     if (!adminId || !ADMIN_IDS.includes(adminId)) return next();
@@ -436,7 +434,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       ])
     );
   });
-  // --- View all contract requests ---
+
   bot.action("admin_contract_requests", async (ctx) => {
     await ctx.answerCbQuery();
 
@@ -464,7 +462,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
-  // --- View single contract request ---
   bot.action(/admin_request_view_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
 
@@ -496,11 +493,46 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.action(/admin_request_approve_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
     const id = ctx.match[1];
+
+    const { data: req } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (!req) return ctx.editMessageText("⚠️ Request not found");
+
     await supabase
       .from("contract_requests")
-      .update({ status: "Approved" })
+      .update({ status: "approved" })
       .eq("id", id);
-    await ctx.editMessageText(`✅ Request #${id} approved`);
+
+    const contractPayload = {
+      user_id: req.user_id,
+      telegram_id: req.user_id,
+      is_active: true,
+      remaining_orders: 30,
+      created_at: new Date().toISOString(),
+    };
+
+    await supabase
+      .from("contracts")
+      .upsert(contractPayload, { onConflict: "user_id" });
+
+    try {
+      if (req.user_id) {
+        await ctx.telegram.sendMessage(
+          Number(req.user_id),
+          `✅ Your contract request has been *approved*! You may now choose *Use Contract* at checkout. Remaining contract orders: 30`,
+          { parse_mode: "Markdown" }
+        );
+      }
+    } catch (err) {
+      console.error("Failed to notify user after contract approval:", err);
+    }
+
+    await ctx.editMessageText(
+      `✅ Request #${id} approved and contract created for user ${req.full_name}`
+    );
   });
 
   bot.action(/admin_request_reject_(.+)/, async (ctx) => {

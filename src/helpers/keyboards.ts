@@ -191,3 +191,19 @@ const riderOrderKeyboard = (orderId: number) =>
       Markup.button.callback(`❌ Reject`, `rider_order_reject_${orderId}`),
     ],
   ]);
+
+export async function getUserContract(userId: number) {
+  const { data: contract, error } = await supabase
+    .from("contracts")
+    .select("*")
+    .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Contract fetch error:", error);
+    return null;
+  }
+
+  return contract || null;
+}

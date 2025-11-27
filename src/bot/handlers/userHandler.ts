@@ -6,6 +6,7 @@ import {
   campusKeyboard,
   getRestaurantKeyboard,
   getFoodKeyboard,
+  getUserContract,
 } from "../../helpers/keyboards.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -20,22 +21,6 @@ function isContactMessage(
 
 const getCallbackData = (ctx: Context) =>
   (ctx.callbackQuery as { data?: string } | undefined)?.data ?? null;
-
-export async function getUserContract(userId: number) {
-  const { data: contract, error } = await supabase
-    .from("contracts")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Contract fetch error:", error);
-    return null;
-  }
-
-  return contract || null;
-}
 
 const initUserState = async (userId: number, profile?: any) => {
   let state = userState.get(userId);
@@ -291,6 +276,7 @@ export function handleUserFlow(
     });
     return ctx.answerCbQuery();
   });
+
   bot.action("done_food", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -304,110 +290,136 @@ export function handleUserFlow(
     state.step = "choose_delivery_type";
     const contract = await getUserContract(userId);
 
-    const keyboard = Markup.inlineKeyboard([
+    const [{ data: pendingRequest }, { data: activeContract }] =
+      await Promise.all([
+        supabase
+          .from("contract_requests")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("status", "pending")
+          .maybeSingle(),
+        supabase
+          .from("contracts")
+          .select("*")
+          .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+          .eq("is_active", true)
+          .maybeSingle(),
+      ]);
+
+    const keyboardRows: any[] = [
       [Markup.button.callback("💵 Pay on Delivery", "delivery_new")],
-      ...(contract && contract.is_active && contract.remaining_orders > 0
-        ? [[Markup.button.callback("📦 Use Contract", "delivery_contract")]]
-        : contract
-        ? []
-        : [
-            [Markup.button.callback("📥 Request Contract", "request_contract")],
-          ]),
-    ]);
+    ];
 
-    await ctx.editMessageText("🚚 Choose delivery type:", {
-      reply_markup: keyboard.reply_markup,
-    });
-
-    return ctx.answerCbQuery();
+    if (activeContract && activeContract.remaining_orders > 0) {
+      keyboardRows.push([
+        Markup.button.callback("📦 Use Contract", "delivery_contract"),
+      ]);
+    } else if (!pendingRequest) {
+      keyboardRows.push([
+        Markup.button.callback("📥 Request Contract", "request_contract"),
+      ]);
+    }
+    const keyboard = Markup.inlineKeyboard(keyboardRows);
   });
+
   bot.action("request_contract", async (ctx) => {
     const userId = ctx.from!.id;
 
-    const { data: activeContract } = await supabase
-      .from("contracts")
-      .select("*")
-      .eq("telegram_id", userId)
-      .eq("is_active", true)
-      .maybeSingle();
+    try {
+      // check for active contract (look by user_id OR telegram_id)
+      const { data: activeContract } = await supabase
+        .from("contracts")
+        .select("*")
+        .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+        .eq("is_active", true)
+        .maybeSingle();
 
-    if (activeContract) {
-      return ctx.answerCbQuery("✔️ You already have an active contract!", {
-        show_alert: true,
-      });
-    }
-
-    const { data: pendingRequest } = await supabase
-      .from("contract_requests")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("status", "pending")
-      .maybeSingle();
-
-    if (pendingRequest) {
-      return ctx.answerCbQuery(
-        "⏳ Your contract request is already pending. Please wait for admin approval.",
-        { show_alert: true }
-      );
-    }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("name, phone")
-      .eq("telegram_id", userId)
-      .maybeSingle();
-
-    const fullName =
-      profile?.name ||
-      `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
-
-    const phone = profile?.phone || "Not Provided";
-
-    const { error: insertError } = await supabase
-      .from("contract_requests")
-      .insert({
-        user_id: userId,
-        username: ctx.from!.username || null,
-        full_name: fullName,
-        phone,
-        status: "pending",
-      });
-
-    if (insertError) {
-      console.error(insertError);
-      return ctx.answerCbQuery("❌ Failed to send request. Try again later.", {
-        show_alert: true,
-      });
-    }
-
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `📥 *New Contract Request*\n\n` +
-          `👤 *Name:* ${fullName}\n` +
-          `📱 *Phone:* ${phone}\n` +
-          `🔗 *Username:* @${ctx.from!.username}\n` +
-          `🆔 *Telegram ID:* ${userId}\n\n` +
-          `👉 Approve or Reject in Admin Panel`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    await ctx.editMessageText(
-      "📨 *Your contract request has been sent!*\n\n" +
-        "Please wait while the admin reviews it.\n\n" +
-        "You may continue using *Pay on Delivery* meanwhile.",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
-          ],
-        },
+      if (activeContract) {
+        return ctx.answerCbQuery(
+          "✔️ You already have an active contract! You can order with it.",
+          { show_alert: true }
+        );
       }
-    );
 
-    return ctx.answerCbQuery();
+      // check for a pending request
+      const { data: pendingRequest } = await supabase
+        .from("contract_requests")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .maybeSingle();
+
+      if (pendingRequest) {
+        return ctx.answerCbQuery(
+          "⏳ Your contract request is still pending. Please wait for admin approval.",
+          { show_alert: true }
+        );
+      }
+
+      // get profile for nicer details
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("name, phone")
+        .eq("telegram_id", userId)
+        .maybeSingle();
+
+      const fullName =
+        profile?.name ||
+        `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
+      const phone = profile?.phone || "Not Provided";
+
+      const { error: insertError } = await supabase
+        .from("contract_requests")
+        .insert({
+          user_id: userId,
+          username: ctx.from!.username || null,
+          full_name: fullName,
+          phone,
+          status: "pending",
+        });
+
+      if (insertError) {
+        console.error("Insert contract request error:", insertError);
+        return ctx.answerCbQuery(
+          "❌ Failed to send request. Try again later.",
+          { show_alert: true }
+        );
+      }
+
+      // notify admins with hint to use admin panel (they approve via admin UI)
+      for (const adminId of ADMIN_IDS) {
+        await ctx.telegram.sendMessage(
+          adminId,
+          `📥 *New Contract Request*\n\n` +
+            `👤 *Name:* ${fullName}\n` +
+            `📱 *Phone:* ${phone}\n` +
+            `🔗 *Username:* @${ctx.from!.username || "N/A"}\n` +
+            `🆔 *Telegram ID:* ${userId}\n\n` +
+            `Please review in Admin → Requests.`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      await ctx.editMessageText(
+        "📨 *Your contract request has been sent!*\n\n" +
+          "Please wait for an admin to approve it. Once approved you will receive a notification and then you can use the *Use Contract* option.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+            ],
+          },
+        }
+      );
+
+      return ctx.answerCbQuery();
+    } catch (err) {
+      console.error("Request contract error:", err);
+      return ctx.answerCbQuery("❌ Something went wrong. Try again later.", {
+        show_alert: true,
+      });
+    }
   });
 
   bot.action(/^delivery_(.+)/, async (ctx) => {

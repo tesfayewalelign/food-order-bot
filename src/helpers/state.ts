@@ -61,10 +61,8 @@ export async function initUserState(userId: number, profile?: any | null) {
     name: profile?.name ?? null,
     phone: profile?.phone ?? null,
     campus: profile?.campus ?? null,
-
     foods: [],
     cartFoods: [],
-
     restaurant: undefined,
     restaurantId: undefined,
     currentFood: undefined,
