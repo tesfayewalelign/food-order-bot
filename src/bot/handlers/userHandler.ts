@@ -324,15 +324,38 @@ export function handleUserFlow(
   bot.action("request_contract", async (ctx) => {
     const userId = ctx.from!.id;
 
-    const { data: profile, error } = await supabase
+    const { data: activeContract } = await supabase
+      .from("contracts")
+      .select("*")
+      .eq("telegram_id", userId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (activeContract) {
+      return ctx.answerCbQuery("✔️ You already have an active contract!", {
+        show_alert: true,
+      });
+    }
+
+    const { data: pendingRequest } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (pendingRequest) {
+      return ctx.answerCbQuery(
+        "⏳ Your contract request is already pending. Please wait for admin approval.",
+        { show_alert: true }
+      );
+    }
+
+    const { data: profile } = await supabase
       .from("profiles")
       .select("name, phone")
       .eq("telegram_id", userId)
       .maybeSingle();
-
-    if (error) {
-      console.error(error);
-    }
 
     const fullName =
       profile?.name ||
@@ -340,13 +363,22 @@ export function handleUserFlow(
 
     const phone = profile?.phone || "Not Provided";
 
-    await supabase.from("contract_requests").insert({
-      user_id: userId,
-      username: ctx.from!.username || null,
-      full_name: fullName,
-      phone,
-      status: "pending",
-    });
+    const { error: insertError } = await supabase
+      .from("contract_requests")
+      .insert({
+        user_id: userId,
+        username: ctx.from!.username || null,
+        full_name: fullName,
+        phone,
+        status: "pending",
+      });
+
+    if (insertError) {
+      console.error(insertError);
+      return ctx.answerCbQuery("❌ Failed to send request. Try again later.", {
+        show_alert: true,
+      });
+    }
 
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
@@ -355,16 +387,18 @@ export function handleUserFlow(
           `👤 *Name:* ${fullName}\n` +
           `📱 *Phone:* ${phone}\n` +
           `🔗 *Username:* @${ctx.from!.username}\n` +
-          `🆔 *Telegram ID:* ${userId}\n\n`,
+          `🆔 *Telegram ID:* ${userId}\n\n` +
+          `👉 Approve or Reject in Admin Panel`,
         { parse_mode: "Markdown" }
       );
     }
 
     await ctx.editMessageText(
-      "📥 Your contract request has been sent!\n\n" +
-        "Admin will review it soon.\n" +
-        "Meanwhile, continue order with Pay on Delivery:",
+      "📨 *Your contract request has been sent!*\n\n" +
+        "Please wait while the admin reviews it.\n\n" +
+        "You may continue using *Pay on Delivery* meanwhile.",
       {
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
