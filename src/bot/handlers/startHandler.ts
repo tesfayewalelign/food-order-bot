@@ -1,7 +1,21 @@
-import { Telegraf, Context } from "telegraf";
+import { Telegraf, Context, Markup } from "telegraf";
 import { supabase } from "../../config/supabase.js";
-import { resetUserState, initUserState } from "../../helpers/state.js";
-import { getMainMenuKeyboard } from "../../helpers/keyboards.js";
+import {
+  resetUserState,
+  initUserState,
+  userState,
+  UserState,
+} from "../../helpers/state.js";
+import {
+  getMainMenuKeyboard,
+  campusKeyboard,
+} from "../../helpers/keyboards.js";
+
+function isContactMessage(
+  msg: any
+): msg is { contact: { phone_number: string } } {
+  return !!msg.contact && !!msg.contact.phone_number;
+}
 
 export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.start(async (ctx) => {
@@ -10,72 +24,114 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     try {
       if (ADMIN_IDS.includes(userId)) {
-        const keyboard = getMainMenuKeyboard(true, false);
-        return ctx.reply(`👋 Welcome Admin ${ctx.from?.first_name}!`, keyboard);
+        return ctx.reply(
+          `👋 Welcome Admin ${ctx.from?.first_name}!`,
+          getMainMenuKeyboard(true, false)
+        );
       }
 
       resetUserState(userId);
 
-      const { data: profile, error: profileError } = await supabase
+      const { data: profile } = await supabase
         .from("profiles")
-        .select("name, phone, telegram_id")
-        .eq("telegram_id", userId)
-        .maybeSingle();
-      if (profileError) console.error(profileError);
-
-      const { data: riderCheck, error: riderError } = await supabase
-        .from("riders")
         .select("*")
         .eq("telegram_id", userId)
         .maybeSingle();
-      if (riderError) console.error(riderError);
 
-      if (riderCheck) {
-        return ctx.reply(
-          `🛵 Welcome Rider ${profile?.name || "Rider"}!`,
-          getMainMenuKeyboard(false, true)
-        );
+      if (!profile) {
+        const state: UserState = await initUserState(userId, undefined);
+        state.step = "profile_ask_name";
+        userState.set(userId, state);
+        return ctx.reply("👤 Welcome! Please enter your full name:");
       }
 
-      const welcomeMessage = profile
-        ? `👋 Welcome back ${profile.name}!\n\n🍽️ Campus Food Delivery - Hawassa University!\nWe bring delicious meals from nearby restaurants straight to your campus.\n\n✅ Fast & reliable delivery\n✅ Affordable prices for students\n✅ Fresh and hygienic food\n\nUse /order to start your meal or /help for assistance.`
-        : `👋 Welcome to Hawassa University Campus Food Delivery!\n\n🍽️ Get fresh meals delivered straight to your campus gate.\n✅ Fast delivery in just minutes\n✅ Affordable student-friendly prices\n✅ Wide selection of tasty meals from local restaurants\n\nPlease share your full name and phone number to get started.`;
-
-      return ctx.reply(welcomeMessage, getMainMenuKeyboard(false, false));
+      return ctx.reply(
+        `👋 Welcome back ${profile.full_name}!`,
+        getMainMenuKeyboard(false, false)
+      );
     } catch (err) {
       console.error("Start command error:", err);
-      try {
-        await ctx.reply(
-          "⚠️ An error occurred during initialization. Please try again later."
-        );
-      } catch {}
+      await ctx.reply(
+        "⚠️ An error occurred during initialization. Please try again later."
+      );
     }
   });
 
+  // --- Handle new user registration flow ---
+  bot.on("message", async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!userId) return next();
+
+    const state = userState.get(userId);
+    if (!state) return next();
+
+    const msg: any = ctx.message;
+
+    // 1️⃣ Ask full name
+    if (state.step === "profile_ask_name" && "text" in msg) {
+      state.name = msg.text.trim();
+      state.step = "profile_ask_phone";
+      userState.set(userId, state);
+
+      return ctx.reply(
+        "📞 Please share your phone number:",
+        Markup.keyboard([
+          Markup.button.contactRequest("📱 Share Phone"),
+        ]).resize()
+      );
+    }
+
+    // 2️⃣ Ask phone via Telegram contact
+    if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
+      state.phone = msg.contact.phone_number;
+      state.step = "profile_ask_campus";
+      userState.set(userId, state);
+
+      return ctx.reply("🏫 Select your campus:", campusKeyboard);
+    }
+
+    // 3️⃣ Ask campus
+    if (state.step === "profile_ask_campus" && "text" in msg) {
+      state.campus = msg.text.trim();
+      state.step = "idle";
+      userState.set(userId, state);
+
+      // Save to DB
+      await supabase.from("profiles").upsert({
+        telegram_id: userId,
+        full_name: state.name,
+        phone: state.phone,
+        campus: state.campus,
+      });
+
+      return ctx.reply(
+        `✅ Registration complete, ${state.name}! You can now use the bot.`,
+        getMainMenuKeyboard(false, false)
+      );
+    }
+
+    return next();
+  });
+
+  // --- Existing /activate command ---
   bot.command("activate", async (ctx) => {
     const text = ctx.message?.text ?? "";
     const parts = text.split(" ");
-
-    if (parts.length < 2) {
+    if (parts.length < 2)
       return ctx.reply("❗ Please send the code like this:\n/activate 4790");
-    }
 
     const code = parts[1]?.trim();
     if (!code) return ctx.reply("❗ Invalid code format.");
 
     try {
-      console.log("Activation code received:", code);
-
-      const { data: rider, error } = await supabase
+      const { data: rider } = await supabase
         .from("riders")
         .select("*")
         .eq("secret_code", code)
         .single();
 
-      if (error || !rider) {
-        console.log("Error:", error);
+      if (!rider)
         return ctx.reply("❌ Rider not found. Please check your code.");
-      }
 
       await supabase
         .from("riders")
