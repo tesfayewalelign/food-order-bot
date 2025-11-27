@@ -436,22 +436,26 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       ])
     );
   });
+  // --- View all contract requests ---
   bot.action("admin_contract_requests", async (ctx) => {
     await ctx.answerCbQuery();
+
     const { data: requests, error } = await supabase
       .from("contract_requests")
-      .select("*")
+      .select("id, username, full_name, phone, status")
       .order("created_at", { ascending: false });
 
-    if (error || !requests || requests.length === 0)
+    if (error || !requests || requests.length === 0) {
       return ctx.editMessageText("📥 No requests available.");
+    }
 
     const rows = requests.map((r: any) => [
       Markup.button.callback(
-        `${r.user_name} | ${r.type || r.id}`,
+        `${r.full_name ?? r.username ?? "Unknown"} | ${r.status ?? "Pending"}`,
         `admin_request_view_${r.id}`
       ),
     ]);
+
     rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
 
     await ctx.editMessageText(
@@ -460,20 +464,27 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
+  // --- View single contract request ---
   bot.action(/admin_request_view_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
+
     const id = ctx.match[1];
     const { data: r } = await supabase
       .from("contract_requests")
-      .select("*")
+      .select("id, username, full_name, phone, status")
       .eq("id", id)
       .maybeSingle();
 
-    if (!r)
+    if (!r) {
       return ctx.answerCbQuery("⚠️ Request not found", { show_alert: true });
+    }
 
     await ctx.editMessageText(
-      `📥 Request ID: ${r.id}\nUser: ${r.user_name}\nType: ${r.type}\nStatus: ${r.status}`,
+      `📥 Request ID: ${r.id}\n` +
+        `Username: ${r.username ?? "N/A"}\n` +
+        `Full Name: ${r.full_name ?? "N/A"}\n` +
+        `Phone: ${r.phone ?? "N/A"}\n` +
+        `Status: ${r.status ?? "Pending"}`,
       Markup.inlineKeyboard([
         [Markup.button.callback("✅ Approve", `admin_request_approve_${r.id}`)],
         [Markup.button.callback("❌ Reject", `admin_request_reject_${r.id}`)],
