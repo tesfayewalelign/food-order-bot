@@ -131,7 +131,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await next();
   });
 
-  // ---------------- BACK BUTTON ----------------
   bot.action("admin_back", async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageText("*👋 Admin Panel*", {
@@ -140,7 +139,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     });
   });
 
-  // ---------------- RESTAURANTS ----------------
   bot.action("admin_restaurants", async (ctx) => {
     await ctx.answerCbQuery();
     const { data: restaurants, error } = await supabase
@@ -200,7 +198,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
-  // ---------------- FOODS ----------------
   bot.action("admin_foods", async (ctx) => {
     await ctx.answerCbQuery();
     const { data: restaurants } = await supabase
@@ -281,7 +278,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
-  // ---------------- RIDERS ----------------
   bot.action("admin_riders", async (ctx) => {
     await ctx.answerCbQuery();
     const { data: riders } = await supabase.from("riders").select("*");
@@ -336,7 +332,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await ctx.reply(`🗑 Rider deleted: ${id}`);
   });
 
-  // ---------------- ORDERS ----------------
   bot.action("admin_orders", async (ctx) => {
     await ctx.answerCbQuery();
     const { data: orders } = await supabase
@@ -401,8 +396,112 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await supabase.from("orders").delete().eq("id", id);
     await ctx.reply(`🗑 Order deleted: ${id}`);
   });
+  bot.action("admin_contracts", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { data: contracts, error } = await supabase
+      .from("contracts")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  // ---------------- DASHBOARD ----------------
+    if (error || !contracts || contracts.length === 0)
+      return ctx.editMessageText("📦 No contracts available.");
+
+    const rows = contracts.map((c: any) => [
+      Markup.button.callback(
+        `Contract: ${c.title || c.id} | ${c.status}`,
+        `admin_contract_view_${c.id}`
+      ),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText("📦 Contracts:", Markup.inlineKeyboard(rows));
+  });
+
+  bot.action(/admin_contract_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: c } = await supabase
+      .from("contracts")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!c)
+      return ctx.answerCbQuery("⚠️ Contract not found", { show_alert: true });
+
+    await ctx.editMessageText(
+      `📦 Contract ID: ${c.id}\nTitle: ${c.title || "-"}\nStatus: ${c.status}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back", "admin_contracts")],
+      ])
+    );
+  });
+  bot.action("admin_contract_requests", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { data: requests, error } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error || !requests || requests.length === 0)
+      return ctx.editMessageText("📥 No requests available.");
+
+    const rows = requests.map((r: any) => [
+      Markup.button.callback(
+        `${r.user_name} | ${r.type || r.id}`,
+        `admin_request_view_${r.id}`
+      ),
+    ]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText(
+      "📥 Contract Requests:",
+      Markup.inlineKeyboard(rows)
+    );
+  });
+
+  bot.action(/admin_request_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const { data: r } = await supabase
+      .from("contract_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!r)
+      return ctx.answerCbQuery("⚠️ Request not found", { show_alert: true });
+
+    await ctx.editMessageText(
+      `📥 Request ID: ${r.id}\nUser: ${r.user_name}\nType: ${r.type}\nStatus: ${r.status}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Approve", `admin_request_approve_${r.id}`)],
+        [Markup.button.callback("❌ Reject", `admin_request_reject_${r.id}`)],
+        [Markup.button.callback("🔙 Back", "admin_contract_requests")],
+      ])
+    );
+  });
+
+  bot.action(/admin_request_approve_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase
+      .from("contract_requests")
+      .update({ status: "Approved" })
+      .eq("id", id);
+    await ctx.editMessageText(`✅ Request #${id} approved`);
+  });
+
+  bot.action(/admin_request_reject_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    await supabase
+      .from("contract_requests")
+      .update({ status: "Rejected" })
+      .eq("id", id);
+    await ctx.editMessageText(`❌ Request #${id} rejected`);
+  });
+
   bot.action("admin_dashboard", async (ctx) => {
     await ctx.answerCbQuery();
     try {
