@@ -54,7 +54,7 @@ export const resetUserState = (userId: number) => {
   });
 };
 
-export async function initUserState(userId: number, profile: any | null) {
+export async function initUserState(userId: number, profile?: any | null) {
   const state: UserState = {
     step: profile ? "idle" : "profile_ask_name",
 

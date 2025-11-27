@@ -34,19 +34,19 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("*")
+        .select("telegram_id, name, phone, campus")
         .eq("telegram_id", userId)
         .maybeSingle();
 
       if (!profile) {
-        const state: UserState = await initUserState(userId, undefined);
+        const state: UserState = await initUserState(userId);
         state.step = "profile_ask_name";
         userState.set(userId, state);
         return ctx.reply("👤 Welcome! Please enter your full name:");
       }
 
       return ctx.reply(
-        `👋 Welcome back ${profile.full_name}!`,
+        `👋 Welcome back ${profile.name}!`,
         getMainMenuKeyboard(false, false)
       );
     } catch (err) {
@@ -95,11 +95,9 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       state.campus = msg.text.trim();
       state.step = "idle";
       userState.set(userId, state);
-
-      // Save to DB
       await supabase.from("profiles").upsert({
         telegram_id: userId,
-        full_name: state.name,
+        name: state.name,
         phone: state.phone,
         campus: state.campus,
       });

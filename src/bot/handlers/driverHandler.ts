@@ -17,7 +17,6 @@ function isTextMessage(
 }
 
 export function setupDriverHandler(bot: Telegraf<Context>) {
-  // ---------------- /start ----------------
   bot.start(async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
@@ -29,7 +28,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       .maybeSingle();
 
     if (rider) {
-      // Rider is already activated
       return ctx.reply(
         `🚗 Welcome back, ${rider.name}!\nChoose an option:`,
         Markup.keyboard([
@@ -53,7 +51,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     const code = match[1];
 
-    // Find rider by secret_code
     const { data: rider } = await supabase
       .from("riders")
       .select("*")
@@ -62,13 +59,11 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     if (!rider) return ctx.reply("❌ Invalid secret code.");
 
-    // Update telegram_id
     await supabase
       .from("riders")
       .update({ telegram_id: ctx.from.id })
       .eq("id", rider.id);
 
-    // Send welcome menu
     ctx.reply(
       `✅ Rider activated! Welcome ${rider.name}!\nChoose an option:`,
       Markup.keyboard([
@@ -79,7 +74,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     );
   });
 
-  // ---------------- /my_orders ----------------
   bot.command("my_orders", async (ctx) => {
     if (!ctx.from?.id) return;
 
@@ -113,7 +107,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     ctx.reply(text);
   });
 
-  // ---------------- /accept ----------------
   bot.command("accept", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
@@ -140,7 +133,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     ctx.reply(`✅ Order #${orderId} accepted!`);
   });
 
-  // ---------------- /reject ----------------
   bot.command("reject", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
