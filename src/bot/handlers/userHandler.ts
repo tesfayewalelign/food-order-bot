@@ -530,7 +530,6 @@ export function handleUserFlow(
         );
       }
 
-      // Get profile details
       const { data: profile } = await supabase
         .from("profiles")
         .select("name, phone")
@@ -542,26 +541,28 @@ export function handleUserFlow(
         `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
       const phone = profile?.phone || "Not Provided";
 
-      const { error: insertError } = await supabase
+      const { data: insertedData, error: insertError } = await supabase
         .from("contract_requests")
         .insert({
           user_id: userId,
-          username: ctx.from!.username || null,
+          username: ctx.from!.username || "N/A",
           full_name: fullName,
           phone,
           status: "pending",
           created_at: new Date().toISOString(),
-        });
+        })
+        .select();
 
       if (insertError) {
         console.error("Insert contract request error:", insertError);
         return ctx.answerCbQuery(
-          "❌ Failed to send request. Try again later.",
+          `❌ Failed to send request. DB Error: ${insertError.message}`,
           { show_alert: true }
         );
       }
 
-      // Notify admins
+      console.log("Inserted request:", insertedData);
+
       for (const adminId of ADMIN_IDS) {
         await ctx.telegram.sendMessage(
           adminId,
