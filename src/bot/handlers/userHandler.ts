@@ -288,7 +288,6 @@ export function handleUserFlow(
     }
 
     state.step = "choose_delivery_type";
-    const contract = await getUserContract(userId);
 
     const [{ data: pendingRequest }, { data: activeContract }] =
       await Promise.all([
@@ -298,10 +297,11 @@ export function handleUserFlow(
           .eq("user_id", userId)
           .eq("status", "pending")
           .maybeSingle(),
+
         supabase
           .from("contracts")
           .select("*")
-          .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+          .eq("telegram_id", userId)
           .eq("is_active", true)
           .maybeSingle(),
       ]);
@@ -319,7 +319,14 @@ export function handleUserFlow(
         Markup.button.callback("📥 Request Contract", "request_contract"),
       ]);
     }
+
     const keyboard = Markup.inlineKeyboard(keyboardRows);
+
+    await ctx.editMessageText("🚚 Choose delivery type:", {
+      reply_markup: keyboard.reply_markup,
+    });
+
+    return ctx.answerCbQuery();
   });
 
   bot.action("request_contract", async (ctx) => {
