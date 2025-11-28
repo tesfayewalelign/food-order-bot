@@ -508,9 +508,9 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     const contractPayload = {
       user_id: req.user_id,
-      telegram_id: req.user_id,
-      is_active: true,
+      order_limit: 30,
       remaining_orders: 30,
+      is_active: true,
       created_at: new Date().toISOString(),
     };
 
