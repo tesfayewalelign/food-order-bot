@@ -197,14 +197,37 @@ export function handleUserFlow(
     }
 
     state.step = "ask_restaurant";
-    const keyboard = await getRestaurantKeyboard();
+
+    const restaurantKeyboard = await getRestaurantKeyboard();
+
+    const keyboardWithBack = Markup.inlineKeyboard([
+      ...restaurantKeyboard.reply_markup.inline_keyboard,
+      [Markup.button.callback("🔙 Back to Campus", "back_to_campus")],
+    ]);
+
     await ctx.editMessageText("🍴 Choose your restaurant:", {
-      reply_markup: keyboard.reply_markup,
+      reply_markup: keyboardWithBack.reply_markup,
     });
+
+    return ctx.answerCbQuery();
+  });
+  bot.action("back_to_campus", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+
+    if (!state)
+      return ctx.answerCbQuery("⚠️ Session expired. /start", {
+        show_alert: true,
+      });
+
+    state.restaurant = "";
+    state.restaurantId = undefined;
+    state.step = "profile_ask_campus";
+
+    await ctx.editMessageText("🏫 Select your campus:", campusKeyboard);
     return ctx.answerCbQuery();
   });
 
-  // ===== Select Restaurant =====
   bot.action(/^restaurant_(.+)/, async (ctx) => {
     const data = getCallbackData(ctx);
     if (!data) return ctx.answerCbQuery();
@@ -234,7 +257,6 @@ export function handleUserFlow(
     state.step = "select_meal_type";
     state.foods = [];
 
-    // Show meal selection keyboard
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
       [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
@@ -249,7 +271,6 @@ export function handleUserFlow(
     return ctx.answerCbQuery();
   });
 
-  // ===== Select Meal Type (Lunch / Dinner) =====
   bot.action(/^meal_(.+)/, async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -265,72 +286,19 @@ export function handleUserFlow(
     state.mealType = mealType;
     state.step = "select_food";
 
-    // Fetch food keyboard
     const keyboard =
       (await getFoodKeyboard(state.restaurantId, mealType)) ||
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🔙 Back", "back_to_restaurants")],
-      ]);
+      Markup.inlineKeyboard([]);
+
+    keyboard.reply_markup.inline_keyboard.push([
+      Markup.button.callback("🔙 Back to Meal", `back_to_meal`),
+    ]);
 
     await ctx.editMessageText(
       `🍔 *Select foods from ${state.restaurant} (${mealType})*\nPress ✅ Done when finished.`,
       { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
     );
-
-    return ctx.answerCbQuery();
   });
-
-  // ===== Custom Restaurant Input =====
-  bot.action("custom_restaurant", async (ctx) => {
-    const userId = ctx.from!.id;
-    const state = userState.get(userId);
-    if (!state)
-      return ctx.answerCbQuery("⚠️ Session expired. /start", {
-        show_alert: true,
-      });
-
-    state.step = "custom_restaurant_name";
-    state.restaurantId = undefined;
-
-    await ctx.editMessageText(
-      "✏️ Please type the name of your restaurant or café:",
-      {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
-        ]).reply_markup,
-      }
-    );
-
-    return ctx.answerCbQuery();
-  });
-
-  // ===== Handle Manual Restaurant Name =====
-  bot.on("message", async (ctx) => {
-    const userId = ctx.from!.id;
-    const state = userState.get(userId);
-    const msg = ctx.message;
-
-    if (!state || !msg || !isTextMessage(msg)) return;
-
-    if (state.step === "custom_restaurant_name") {
-      state.restaurant = msg.text.trim();
-      state.step = "select_food";
-
-      // Fetch foods for custom restaurant (pass undefined for ID)
-      const keyboard =
-        (await getFoodKeyboard(undefined, state.restaurant)) ||
-        Markup.inlineKeyboard([
-          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
-        ]);
-
-      await ctx.editMessageText(`🍔 Select foods from ${state.restaurant}:`, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard.reply_markup,
-      });
-    }
-  });
-
-  // ===== Back to Restaurant List =====
   bot.action("back_to_restaurants", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -347,6 +315,79 @@ export function handleUserFlow(
     });
 
     return ctx.answerCbQuery();
+  });
+
+  bot.action("custom_restaurant", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state)
+      return ctx.answerCbQuery("⚠️ Session expired. /start", {
+        show_alert: true,
+      });
+
+    state.step = "custom_restaurant_name";
+    state.restaurantId = undefined;
+
+    await ctx.editMessageText(
+      "✏️ Please type the name of your restaurant or café:",
+      {
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("🔙 Back to Meal", "back_to_meal")],
+        ]).reply_markup,
+      }
+    );
+
+    return ctx.answerCbQuery();
+  });
+
+  bot.action("back_to_meal", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+
+    if (!state)
+      return ctx.answerCbQuery("⚠️ Session expired. /start", {
+        show_alert: true,
+      });
+
+    state.step = "select_meal_type";
+    state.foods = [];
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
+      [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
+      [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+    ]);
+
+    await ctx.editMessageText(
+      `🍴 *${state.restaurant}*\nPlease choose meal type:`,
+      { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
+    );
+
+    return ctx.answerCbQuery();
+  });
+
+  bot.on("message", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    const msg = ctx.message;
+
+    if (!state || !msg || !isTextMessage(msg)) return;
+
+    if (state.step === "custom_restaurant_name") {
+      state.restaurant = msg.text.trim();
+      state.step = "select_food";
+
+      const keyboard =
+        (await getFoodKeyboard(undefined, state.restaurant)) ||
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+        ]);
+
+      await ctx.editMessageText(`🍔 Select foods from ${state.restaurant}:`, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
   });
 
   bot.action(/^food_(.+)$/, async (ctx) => {
@@ -421,6 +462,9 @@ export function handleUserFlow(
         Markup.button.callback("📥 Request Contract", "request_contract"),
       ]);
     }
+    keyboardRows.push([
+      Markup.button.callback("🔙 Back to Foods", "back_to_food_selection"),
+    ]);
 
     const keyboard = Markup.inlineKeyboard(keyboardRows);
 
@@ -435,11 +479,32 @@ export function handleUserFlow(
     const userId = ctx.from!.id;
 
     try {
-      // check for active contract (look by user_id OR telegram_id)
+      // Ensure the user exists in users table
+      const { error: userError } = await supabase.from("users").upsert(
+        {
+          id: userId,
+          username: ctx.from!.username || null,
+          full_name: `${ctx.from!.first_name ?? ""} ${
+            ctx.from!.last_name ?? ""
+          }`.trim(),
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+
+      if (userError) {
+        console.error("Error upserting user:", userError);
+        return ctx.answerCbQuery(
+          "❌ Cannot process request. Try again later.",
+          { show_alert: true }
+        );
+      }
+
+      // Check for active contract
       const { data: activeContract } = await supabase
         .from("contracts")
         .select("*")
-        .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+        .eq("user_id", userId)
         .eq("is_active", true)
         .maybeSingle();
 
@@ -450,7 +515,7 @@ export function handleUserFlow(
         );
       }
 
-      // check for a pending request
+      // Check for pending request
       const { data: pendingRequest } = await supabase
         .from("contract_requests")
         .select("*")
@@ -465,7 +530,7 @@ export function handleUserFlow(
         );
       }
 
-      // get profile for nicer details
+      // Get profile details
       const { data: profile } = await supabase
         .from("profiles")
         .select("name, phone")
@@ -485,6 +550,7 @@ export function handleUserFlow(
           full_name: fullName,
           phone,
           status: "pending",
+          created_at: new Date().toISOString(),
         });
 
       if (insertError) {
@@ -495,7 +561,7 @@ export function handleUserFlow(
         );
       }
 
-      // notify admins with hint to use admin panel (they approve via admin UI)
+      // Notify admins
       for (const adminId of ADMIN_IDS) {
         await ctx.telegram.sendMessage(
           adminId,
@@ -510,8 +576,7 @@ export function handleUserFlow(
       }
 
       await ctx.editMessageText(
-        "📨 *Your contract request has been sent!*\n\n" +
-          "Please wait for an admin to approve it. Once approved you will receive a notification and then you can use the *Use Contract* option.",
+        "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
         {
           parse_mode: "Markdown",
           reply_markup: {
@@ -529,6 +594,29 @@ export function handleUserFlow(
         show_alert: true,
       });
     }
+  });
+  bot.action("back_to_food_selection", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state)
+      return ctx.answerCbQuery("⚠️ Session expired. /start", {
+        show_alert: true,
+      });
+
+    state.step = "select_food";
+
+    const keyboard =
+      (await getFoodKeyboard(state.restaurantId, state.mealType)) ||
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back to Meal", "back_to_restaurants")],
+      ]);
+
+    await ctx.editMessageText(
+      `🍔 *Select foods from ${state.restaurant} (${state.mealType})*\nPress ✅ Done when finished.`,
+      { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
+    );
+
+    return ctx.answerCbQuery();
   });
 
   bot.action(/^delivery_(.+)/, async (ctx) => {
@@ -549,7 +637,11 @@ export function handleUserFlow(
     state.deliveryType = deliveryType;
     state.step = "confirm_order";
 
-    const deliveryFee = deliveryType === "new" ? 10 : 0;
+    const deliveryFee =
+      state.deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
     const subtotal = state.foods.reduce(
       (acc, f) => acc + f.price * f.quantity,
       0
@@ -559,6 +651,15 @@ export function handleUserFlow(
     const foodsList = state.foods
       .map((f) => `\`${f.name} x${f.quantity} = ${f.price * f.quantity} ETB\``)
       .join("\n");
+    const deliveryFeeText =
+      state.deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
+    await ctx.editMessageText(
+      `🧾 *Order Summary*\n\n🍔 Items:\n${foodsList}\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFeeText} ETB\n💵 Total: ${totalPrice} ETB`,
+      { parse_mode: "Markdown" }
+    );
 
     let contractInfo = "";
     if (deliveryType === "contract") {

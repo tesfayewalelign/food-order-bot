@@ -38,6 +38,25 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         .eq("telegram_id", userId)
         .maybeSingle();
 
+      const fullName =
+        profile?.name ||
+        `${ctx.from?.first_name ?? ""} ${ctx.from?.last_name ?? ""}`.trim();
+
+      const { error: userError } = await supabase.from("users").upsert(
+        {
+          id: userId,
+          username: ctx.from?.username || null,
+          full_name: fullName,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+
+      if (userError) {
+        console.error("Error upserting user:", userError);
+        return ctx.reply("❌ Failed to initialize user. Try again later.");
+      }
+
       if (!profile) {
         const state: UserState = await initUserState(userId);
         state.step = "profile_ask_name";

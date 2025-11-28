@@ -492,61 +492,72 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.action(/admin_request_approve_(\d+)/, async (ctx) => {
     const requestId = Number(ctx.match[1]);
 
-    // 1️⃣ Get the request
-    const { data: request, error: reqError } = await supabase
-      .from("contract_requests")
-      .select("*")
-      .eq("id", requestId)
-      .maybeSingle();
+    try {
+      const { data: request } = await supabase
+        .from("contract_requests")
+        .select("*")
+        .eq("id", requestId)
+        .maybeSingle();
 
-    if (reqError || !request) {
-      console.error("Request fetch error:", reqError);
-      return ctx.reply("❌ Error: Request not found.");
+      if (!request) {
+        return ctx.reply("❌ Request not found.");
+      }
+
+      await supabase.from("users").upsert(
+        {
+          id: request.user_id,
+          username: request.username || null,
+          full_name: request.full_name,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+
+      const { error: contractError } = await supabase.from("contracts").upsert(
+        {
+          user_id: request.user_id,
+          order_limit: 30,
+          remaining_orders: 30,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (contractError) {
+        console.error("Error creating/updating contract:", contractError);
+        return ctx.reply("❌ Error creating/updating contract.");
+      }
+
+      await supabase
+        .from("contract_requests")
+        .update({ status: "approved" })
+        .eq("id", requestId);
+
+      await bot.telegram.sendMessage(
+        request.user_id,
+        "✅ Your contract request has been approved! You can now choose *Use Contract* at checkout.",
+        { parse_mode: "Markdown" }
+      );
+
+      return ctx.reply(
+        `✅ Request #${requestId} approved and contract created.`
+      );
+    } catch (err) {
+      console.error("Admin approve contract error:", err);
+      return ctx.reply("❌ Failed to approve contract. See logs.");
     }
-
-    // 2️⃣ Upsert contract
-    const { error: contractError } = await supabase.from("contracts").upsert(
-      {
-        user_id: request.user_id,
-        order_limit: 30,
-        remaining_orders: 30,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" } // ensures one contract per user
-    );
-
-    if (contractError) {
-      console.error("Error creating/updating contract:", contractError);
-      return ctx.reply("❌ Error creating contract. Check logs.");
-    }
-
-    const { error: updateReqError } = await supabase
-      .from("contract_requests")
-      .update({ status: "approved" })
-      .eq("id", requestId);
-
-    if (updateReqError)
-      console.error("Request status update error:", updateReqError);
-
-    await ctx.editMessageText(
-      `✅ Request #${requestId} approved and contract created.`
-    );
-    await bot.telegram.sendMessage(
-      request.user_id,
-      "✅ Your contract request has been approved! You can now choose *Use Contract* at checkout.",
-      { parse_mode: "Markdown" }
-    );
   });
 
-  bot.action(/admin_request_reject_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
+  bot.action(/admin_request_reject_(\d+)/, async (ctx) => {
+    const requestId = Number(ctx.match[1]);
     await supabase
       .from("contract_requests")
-      .update({ status: "Rejected" })
-      .eq("id", id);
-    await ctx.editMessageText(`❌ Request #${id} rejected`);
+      .update({ status: "rejected" })
+      .eq("id", requestId);
+
+    await ctx.editMessageText(`❌ Request #${requestId} rejected`);
+    return ctx.answerCbQuery();
   });
 
   bot.action("admin_dashboard", async (ctx) => {
