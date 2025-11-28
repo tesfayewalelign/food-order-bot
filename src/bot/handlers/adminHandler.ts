@@ -490,10 +490,10 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
-  bot.action(/approve_(\d+)/, async (ctx) => {
+  bot.action(/admin_request_approve_(\d+)/, async (ctx) => {
     const requestId = Number(ctx.match[1]);
 
-    // 1. Get request data
+    // 1️⃣ Get request data
     const { data: request } = await supabase
       .from("contract_requests")
       .select("*")
@@ -504,30 +504,30 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       return ctx.reply("Error: Request not found.");
     }
 
-    // 2. Insert into contracts table
+    // 2️⃣ Create contract
     const { error: insertError } = await supabase.from("contracts").insert({
       user_id: request.user_id,
       order_limit: 30,
       remaining_orders: 30,
       is_active: true,
+      created_at: new Date().toISOString(),
     });
 
     if (insertError) {
-      console.log(insertError);
+      console.error("Error creating contract:", insertError);
       return ctx.reply("Error creating contract.");
     }
 
-    // 3. Update request status
     await supabase
       .from("contract_requests")
       .update({ status: "approved" })
       .eq("id", requestId);
 
-    // 4. Inform admin and user
     ctx.reply(`Request #${requestId} approved and contract created.`);
-    bot.telegram.sendMessage(
+    await bot.telegram.sendMessage(
       request.user_id,
-      "Your contract request has been approved! You can now choose *Use Contract* at checkout."
+      "✅ Your contract request has been approved! You can now choose *Use Contract* at checkout.",
+      { parse_mode: "Markdown" }
     );
   });
 

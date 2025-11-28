@@ -95,7 +95,10 @@ export async function getRestaurantKeyboard() {
   }
 }
 
-export async function getFoodKeyboard(restaurantId: string) {
+export async function getFoodKeyboard(
+  restaurantId?: string,
+  mealType?: string
+) {
   try {
     const { data: foods, error } = await supabase
       .from("foods")

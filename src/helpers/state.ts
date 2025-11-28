@@ -24,7 +24,9 @@ export interface UserState {
     | "select_food"
     | "waiting_for_quantity"
     | "choose_delivery_type"
-    | "confirm_order";
+    | "confirm_order"
+    | "select_meal_type"
+    | "custom_restaurant_name";
 
   foods: FoodItem[];
 
@@ -42,6 +44,7 @@ export interface UserState {
   cartFoods: any[];
 
   restaurantId?: string;
+  mealType?: string;
 }
 
 export const userState = new Map<number, UserState>();
