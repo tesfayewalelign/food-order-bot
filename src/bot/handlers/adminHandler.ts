@@ -508,7 +508,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     const { error: insertError } = await supabase.from("contracts").insert({
       user_id: request.user_id,
       order_limit: 30,
-      remaining_order: 30,
+      remaining_orders: 30,
       is_active: true,
     });
 
