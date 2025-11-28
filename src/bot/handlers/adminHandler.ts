@@ -490,48 +490,44 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     );
   });
 
-  bot.action(/admin_request_approve_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
+  bot.action(/approve_(\d+)/, async (ctx) => {
+    const requestId = Number(ctx.match[1]);
 
-    const { data: req } = await supabase
+    // 1. Get request data
+    const { data: request } = await supabase
       .from("contract_requests")
       .select("*")
-      .eq("id", id)
+      .eq("id", requestId)
       .maybeSingle();
-    if (!req) return ctx.editMessageText("⚠️ Request not found");
 
+    if (!request) {
+      return ctx.reply("Error: Request not found.");
+    }
+
+    // 2. Insert into contracts table
+    const { error: insertError } = await supabase.from("contracts").insert({
+      user_id: request.user_id,
+      order_limit: 30,
+      remaining_order: 30,
+      is_active: true,
+    });
+
+    if (insertError) {
+      console.log(insertError);
+      return ctx.reply("Error creating contract.");
+    }
+
+    // 3. Update request status
     await supabase
       .from("contract_requests")
       .update({ status: "approved" })
-      .eq("id", id);
+      .eq("id", requestId);
 
-    const contractPayload = {
-      user_id: req.user_id,
-      order_limit: 30,
-      remaining_orders: 30,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    };
-
-    await supabase
-      .from("contracts")
-      .upsert(contractPayload, { onConflict: "user_id" });
-
-    try {
-      if (req.user_id) {
-        await ctx.telegram.sendMessage(
-          Number(req.user_id),
-          `✅ Your contract request has been *approved*! You may now choose *Use Contract* at checkout. Remaining contract orders: 30`,
-          { parse_mode: "Markdown" }
-        );
-      }
-    } catch (err) {
-      console.error("Failed to notify user after contract approval:", err);
-    }
-
-    await ctx.editMessageText(
-      `✅ Request #${id} approved and contract created for user ${req.full_name}`
+    // 4. Inform admin and user
+    ctx.reply(`Request #${requestId} approved and contract created.`);
+    bot.telegram.sendMessage(
+      request.user_id,
+      "Your contract request has been approved! You can now choose *Use Contract* at checkout."
     );
   });
 

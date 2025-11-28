@@ -43,6 +43,7 @@ export const campusKeyboard = Markup.inlineKeyboard([
   ],
   [Markup.button.callback("🏫 Techno Boys Dorm", "campus_techno_boys")],
   [Markup.button.callback("🏫 Techno Girls Dorm", "campus_techno_girls")],
+  [Markup.button.callback("🏫 Agri Campus", "campus_agri")],
 ]);
 
 export const deliveryKeyboard = Markup.inlineKeyboard([
