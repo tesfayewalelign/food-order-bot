@@ -204,7 +204,7 @@ export function handleUserFlow(
     return ctx.answerCbQuery();
   });
 
-  // === Restaurant Selection Handler ===
+  // ===== Select Restaurant =====
   bot.action(/^restaurant_(.+)/, async (ctx) => {
     const data = getCallbackData(ctx);
     if (!data) return ctx.answerCbQuery();
@@ -231,24 +231,25 @@ export function handleUserFlow(
     }
 
     state.restaurant = restaurant.name;
-    state.foods = [];
     state.step = "select_meal_type";
+    state.foods = [];
+
+    // Show meal selection keyboard
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
+      [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
+      [Markup.button.callback("🔙 Back", `back_to_restaurants`)],
+    ]);
 
     await ctx.editMessageText(
       `🍴 *${restaurant.name}*\nPlease choose meal type:`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("🥗 Lunch", "meal_lunch")],
-          [Markup.button.callback("🌙 Dinner", "meal_dinner")],
-          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
-        ]).reply_markup,
-      }
+      { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
     );
 
     return ctx.answerCbQuery();
   });
 
+  // ===== Select Meal Type (Lunch / Dinner) =====
   bot.action(/^meal_(.+)/, async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -264,21 +265,22 @@ export function handleUserFlow(
     state.mealType = mealType;
     state.step = "select_food";
 
-    const keyboard = await getFoodKeyboard(state.restaurantId, mealType);
-
-    if (!keyboard)
-      return ctx.editMessageText(
-        `⚠️ No foods available for ${state.restaurant} (${mealType})`
-      );
+    // Fetch food keyboard
+    const keyboard =
+      (await getFoodKeyboard(state.restaurantId, mealType)) ||
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+      ]);
 
     await ctx.editMessageText(
-      `🍔 *Select foods from ${state.restaurant} (${mealType})*\nPlease choose your items below. Press ✅ Done when finished.`,
+      `🍔 *Select foods from ${state.restaurant} (${mealType})*\nPress ✅ Done when finished.`,
       { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
     );
 
     return ctx.answerCbQuery();
   });
 
+  // ===== Custom Restaurant Input =====
   bot.action("custom_restaurant", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -302,6 +304,7 @@ export function handleUserFlow(
     return ctx.answerCbQuery();
   });
 
+  // ===== Handle Manual Restaurant Name =====
   bot.on("message", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -313,17 +316,21 @@ export function handleUserFlow(
       state.restaurant = msg.text.trim();
       state.step = "select_food";
 
-      const keyboard = await getFoodKeyboard(undefined, state.restaurant);
-      await ctx.reply(
-        `🍔 Select foods from ${state.restaurant}:`,
-        keyboard?.reply_markup
-          ? { reply_markup: keyboard.reply_markup }
-          : undefined
-      );
+      // Fetch foods for custom restaurant (pass undefined for ID)
+      const keyboard =
+        (await getFoodKeyboard(undefined, state.restaurant)) ||
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+        ]);
+
+      await ctx.editMessageText(`🍔 Select foods from ${state.restaurant}:`, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
     }
   });
 
-  // === Back to Restaurants Handler ===
+  // ===== Back to Restaurant List =====
   bot.action("back_to_restaurants", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -334,6 +341,7 @@ export function handleUserFlow(
 
     state.step = "ask_restaurant";
     const keyboard = await getRestaurantKeyboard();
+
     await ctx.editMessageText("🍴 Choose your restaurant:", {
       reply_markup: keyboard.reply_markup,
     });
@@ -602,7 +610,11 @@ export function handleUserFlow(
       );
     }
 
-    const deliveryFee = state.deliveryType === "new" ? 10 : 0;
+    const deliveryFee =
+      state.deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
     const subtotal = state.foods.reduce(
       (acc, f) => acc + f.price * f.quantity,
       0
@@ -610,8 +622,17 @@ export function handleUserFlow(
     const totalPrice = subtotal + deliveryFee;
 
     const foodsList = state.foods
-      .map((f) => `${f.name} x${f.quantity}`)
-      .join(", ");
+      .map((f) => `\`${f.name} x${f.quantity} = ${f.price * f.quantity} ETB\``)
+      .join("\n");
+    const deliveryFeeText =
+      state.deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
+    await ctx.editMessageText(
+      `🧾 *Order Summary*\n\n🍔 Items:\n${foodsList}\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFeeText} ETB\n💵 Total: ${totalPrice} ETB`,
+      { parse_mode: "Markdown" }
+    );
 
     try {
       if (state.deliveryType === "contract") {
