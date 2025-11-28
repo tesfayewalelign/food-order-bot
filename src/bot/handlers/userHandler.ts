@@ -301,7 +301,7 @@ export function handleUserFlow(
         supabase
           .from("contracts")
           .select("*")
-          .eq("telegram_id", userId)
+          .eq("user_id", userId)
           .eq("is_active", true)
           .maybeSingle(),
       ]);
