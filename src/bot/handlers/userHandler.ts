@@ -479,14 +479,10 @@ export function handleUserFlow(
     const userId = ctx.from!.id;
 
     try {
-      // Ensure the user exists in users table
       const { error: userError } = await supabase.from("users").upsert(
         {
           id: userId,
           username: ctx.from!.username || null,
-          full_name: `${ctx.from!.first_name ?? ""} ${
-            ctx.from!.last_name ?? ""
-          }`.trim(),
           created_at: new Date().toISOString(),
         },
         { onConflict: "id" }
@@ -500,7 +496,6 @@ export function handleUserFlow(
         );
       }
 
-      // Check for active contract
       const { data: activeContract } = await supabase
         .from("contracts")
         .select("*")
@@ -515,7 +510,6 @@ export function handleUserFlow(
         );
       }
 
-      // Check for pending request
       const { data: pendingRequest } = await supabase
         .from("contract_requests")
         .select("*")
