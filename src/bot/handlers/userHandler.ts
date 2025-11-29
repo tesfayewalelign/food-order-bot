@@ -114,6 +114,23 @@ export function handleUserFlow(
         });
       }
 
+      if (state.step === "custom_restaurant_name" && isTextMessage(msg)) {
+        state.restaurant = msg.text.trim();
+        state.restaurantId = undefined; // it's a user-added restaurant
+        state.step = "select_meal_type";
+
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
+          [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
+          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+        ]);
+
+        return ctx.editMessageText(
+          `🍴 *${state.restaurant}*\nPlease choose meal type:`,
+          { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
+        );
+      }
+
       if (isTextMessage(msg)) {
         switch (msg.text) {
           case "🍔 Order Food":
@@ -279,10 +296,9 @@ export function handleUserFlow(
         show_alert: true,
       });
 
-    const data = getCallbackData(ctx);
-    if (!data) return ctx.answerCbQuery();
+    const mealType = getCallbackData(ctx)?.replace("meal_", "");
+    if (!mealType) return ctx.answerCbQuery();
 
-    const mealType = data.replace("meal_", "");
     state.mealType = mealType;
     state.step = "select_food";
 
@@ -291,13 +307,15 @@ export function handleUserFlow(
       Markup.inlineKeyboard([]);
 
     keyboard.reply_markup.inline_keyboard.push([
-      Markup.button.callback("🔙 Back to Meal", `back_to_meal`),
+      Markup.button.callback("🔙 Back", "back_to_meal"),
     ]);
 
     await ctx.editMessageText(
       `🍔 *Select foods from ${state.restaurant} (${mealType})*\nPress ✅ Done when finished.`,
       { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
     );
+
+    return ctx.answerCbQuery();
   });
   bot.action("back_to_restaurants", async (ctx) => {
     const userId = ctx.from!.id;
@@ -321,22 +339,91 @@ export function handleUserFlow(
     const userId = ctx.from!.id;
     const state = userState.get(userId);
     if (!state)
-      return ctx.answerCbQuery("⚠️ Session expired. /start", {
-        show_alert: true,
-      });
+      return ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
 
     state.step = "custom_restaurant_name";
     state.restaurantId = undefined;
 
-    await ctx.editMessageText(
-      "✏️ Please type the name of your restaurant or café:",
-      {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("🔙 Back to Meal", "back_to_meal")],
-        ]).reply_markup,
-      }
-    );
+    await ctx.editMessageText("✏️ Type the name of your restaurant or café:", {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back", "back_to_meal")],
+      ]).reply_markup,
+    });
 
+    return ctx.answerCbQuery();
+  });
+
+  // Capture Custom Restaurant Name
+  bot.on("message", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    const msg = ctx.message;
+    if (!state || !isTextMessage(msg)) return;
+
+    if (state.step === "custom_restaurant_name") {
+      state.restaurant = msg.text.trim();
+      state.step = "select_food";
+
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback("Add Custom Food", "custom_food")],
+        [Markup.button.callback("✅ Done", "done_food")],
+      ]);
+
+      await ctx.editMessageText(`🍴 Select foods from ${state.restaurant}:`, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+
+    // Custom Food Name
+    if (state.step === "custom_food_name") {
+      state.currentFood = msg.text.trim();
+      state.currentFoodPrice = 0; // price unknown
+      state.step = "waiting_for_quantity";
+
+      return ctx.reply(
+        `🍽 You selected *${state.currentFood}*.\nEnter quantity:`,
+        {
+          parse_mode: "Markdown",
+        }
+      );
+    }
+
+    // Quantity for custom food
+    if (state.step === "waiting_for_quantity") {
+      const quantity = Number(msg.text);
+      if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
+        return ctx.reply("⚠️ Enter a valid whole number.");
+
+      state.foods.push({
+        name: state.currentFood!,
+        quantity,
+        price: state.currentFoodPrice!,
+      });
+
+      state.currentFood = undefined;
+      state.currentFoodPrice = undefined;
+      state.step = "select_food";
+
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback("Add Custom Food", "custom_food")],
+        [Markup.button.callback("✅ Done", "done_food")],
+      ]);
+
+      return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  });
+
+  bot.action("custom_food", async (ctx) => {
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state)
+      return ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
+
+    state.step = "custom_food_name";
+    await ctx.reply("✏️ Type the name of your custom food:");
     return ctx.answerCbQuery();
   });
 
@@ -684,6 +771,8 @@ export function handleUserFlow(
         state.phone || "N/A"
       }\n🏫 ${state.campus || "N/A"}\n🍽 ${
         state.restaurant || "N/A"
+      }\n🍴 Meal Type: ${
+        state.mealType || "N/A"
       }\n\n🍔 *Items:*\n${foodsList}\n\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFee} ETB\n💵 Total: ${totalPrice} ETB\n\n${contractInfo}`,
       {
         parse_mode: "Markdown",
@@ -820,7 +909,13 @@ export function handleUserFlow(
           if (r.telegram_id) {
             await ctx.telegram.sendMessage(
               r.telegram_id,
-              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${state.name}\n🏫 ${state.campus}\n📞[${state.phone}](tel:${state.phone})\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}`,
+              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${
+                state.name
+              }\n🏫 ${state.campus}\n📞[${state.phone}](tel:${
+                state.phone
+              })\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}\n🍴 Meal Type: ${
+                state.mealType || "N/A"
+              }`,
 
               {
                 parse_mode: "Markdown",

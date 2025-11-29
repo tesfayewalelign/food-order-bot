@@ -27,7 +27,8 @@ export interface UserState {
     | "choose_delivery_type"
     | "confirm_order"
     | "select_meal_type"
-    | "custom_restaurant_name";
+    | "custom_restaurant_name"
+    | "custom_food_name";
 
   foods: FoodItem[];
 
