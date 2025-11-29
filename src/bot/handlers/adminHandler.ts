@@ -531,6 +531,15 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       if (!request) return ctx.reply("❌ Request not found.");
 
+      await supabase.from("users").upsert(
+        {
+          telegram_id: request.user_id,
+          name: request.full_name,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "telegram_id" }
+      );
+
       await supabase.from("contracts").upsert(
         {
           user_id: request.user_id,
@@ -547,7 +556,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         .update({ status: "approved" })
         .eq("id", requestId);
 
-      await bot.telegram.sendMessage(
+      await ctx.telegram.sendMessage(
         request.user_id,
         "✅ Your contract request has been approved! You can now choose *Use Contract* at checkout.",
         { parse_mode: "Markdown" }
@@ -571,24 +580,10 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         .update({ status: "rejected" })
         .eq("id", requestId);
 
-      const { data: request } = await supabase
-        .from("contract_requests")
-        .select("*")
-        .eq("id", requestId)
-        .maybeSingle();
-      if (request?.user_id) {
-        await ctx.telegram.sendMessage(
-          request.user_id,
-          `❌ Your contract request has been rejected.`
-        );
-      }
-
       return ctx.editMessageText(`❌ Request #${requestId} rejected`);
     } catch (err) {
       console.error("Admin reject contract error:", err);
-      return ctx.answerCbQuery("❌ Failed to reject request.", {
-        show_alert: true,
-      });
+      return ctx.reply("❌ Failed to reject contract. See logs.");
     }
   });
 

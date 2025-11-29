@@ -563,21 +563,9 @@ export function handleUserFlow(
         console.error("Error upserting user:", userError);
         return ctx.answerCbQuery(
           "❌ Cannot process request. Try again later.",
-          { show_alert: true }
-        );
-      }
-
-      const { data: existingRequest } = await supabase
-        .from("contract_requests")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("status", "pending")
-        .maybeSingle();
-
-      if (existingRequest) {
-        return ctx.answerCbQuery(
-          "⚠️ You already have a pending contract request.",
-          { show_alert: true }
+          {
+            show_alert: true,
+          }
         );
       }
 
@@ -592,25 +580,25 @@ export function handleUserFlow(
         `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
       const phone = profile?.phone || "Not Provided";
 
-      const { data: request, error: insertError } = await supabase
+      const { error: requestError } = await supabase
         .from("contract_requests")
         .insert([
           {
             user_id: userId,
             full_name: fullName,
-            phone: phone,
             status: "pending",
             created_at: new Date().toISOString(),
           },
-        ])
-        .select("*")
-        .single();
+        ]);
 
-      if (insertError || !request) {
-        console.error("Insert contract request error:", insertError);
-        return ctx.answerCbQuery("❌ Failed to send contract request.", {
-          show_alert: true,
-        });
+      if (requestError) {
+        console.error("Error inserting contract request:", requestError);
+        return ctx.answerCbQuery(
+          "❌ Failed to request contract. Try again later.",
+          {
+            show_alert: true,
+          }
+        );
       }
 
       for (const adminId of ADMIN_IDS) {
@@ -621,23 +609,24 @@ export function handleUserFlow(
             `📱 *Phone:* ${phone}\n` +
             `🔗 *Username:* @${ctx.from!.username || "N/A"}\n` +
             `🆔 *Telegram ID:* ${userId}\n\n` +
-            `Please review in Admin → Requests.\n` +
-            `Approve: /admin_request_approve_${request.id}  |  Reject: /admin_request_reject_${request.id}`,
+            `Please review in Admin → Requests.`,
           { parse_mode: "Markdown" }
         );
       }
 
-      await ctx.editMessageText(
-        "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
-            ],
-          },
-        }
-      );
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(
+          "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+              ],
+            },
+          }
+        );
+      }
 
       return ctx.answerCbQuery();
     } catch (err) {
