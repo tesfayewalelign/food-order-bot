@@ -8,6 +8,8 @@ import {
   getFoodKeyboard,
   getUserContract,
 } from "../../helpers/keyboards.js";
+import { isOrderTime, nextOrderWindow } from "../../helpers/time.js";
+
 import { v4 as uuidv4 } from "uuid";
 
 function isTextMessage(msg: any): msg is { text: string } {
@@ -113,27 +115,52 @@ export function handleUserFlow(
           reply_markup: keyboard?.reply_markup,
         });
       }
-
       if (state.step === "custom_restaurant_name" && isTextMessage(msg)) {
         state.restaurant = msg.text.trim();
         state.restaurantId = undefined;
-        state.step = "select_meal_type";
+        state.step = "select_food";
 
-        const keyboard = Markup.inlineKeyboard([
-          [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
-          [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
-          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
-        ]);
+        return ctx.reply(`🍴 Select foods from *${state.restaurant}*:`, {
+          parse_mode: "Markdown",
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.callback("➕ Add Custom Food", "custom_food")],
+            [Markup.button.callback("✅ Done", "done_food")],
+          ]).reply_markup,
+        });
+      }
 
-        return ctx.editMessageText(
-          `🍴 *${state.restaurant}*\nPlease choose meal type:`,
-          { parse_mode: "Markdown", reply_markup: keyboard.reply_markup }
+      if (state.step === "custom_food_name" && isTextMessage(msg)) {
+        state.currentFood = msg.text.trim();
+        state.step = "ask_custom_price";
+
+        return ctx.reply(
+          `💲 Enter the price for *${state.currentFood}* (send 0 if unknown):`,
+          { parse_mode: "Markdown" }
         );
+      }
+
+      if (state.step === "ask_custom_price" && isTextMessage(msg)) {
+        const price = Number(msg.text);
+        if (isNaN(price) || price < 0)
+          return ctx.reply("⚠️ Invalid price. Enter a number or 0.");
+
+        state.currentFoodPrice = price;
+        state.step = "waiting_for_quantity";
+
+        return ctx.reply(`🔢 Enter quantity for *${state.currentFood}*:`, {
+          parse_mode: "Markdown",
+        });
       }
 
       if (isTextMessage(msg)) {
         switch (msg.text) {
           case "🍔 Order Food":
+            if (!isOrderTime()) {
+              return ctx.reply(
+                `⏰ Sorry! Ordering is only allowed during the allowed time.\n` +
+                  `Next order window opens at: ${nextOrderWindow()}`
+              );
+            }
             state.step = "profile_ask_campus";
             return ctx.reply("🍔 Choose your campus:", campusKeyboard);
 
@@ -352,80 +379,7 @@ export function handleUserFlow(
 
     return ctx.answerCbQuery();
   });
-  bot.on("message", async (ctx) => {
-    const userId = ctx.from!.id;
-    const state = userState.get(userId);
-    const msg = ctx.message;
 
-    if (!state || !isTextMessage(msg)) return;
-
-    // --- Step 1: Restaurant Name ---
-    if (state.step === "custom_restaurant_name") {
-      state.restaurant = msg.text.trim();
-      state.step = "select_food";
-
-      return ctx.reply(`🍴 Select foods from *${state.restaurant}*:`, {
-        parse_mode: "Markdown",
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("➕ Add Custom Food", "custom_food")],
-          [Markup.button.callback("✅ Done", "done_food")],
-        ]).reply_markup,
-      });
-    }
-
-    // --- Step 2: Food Name ---
-    if (state.step === "custom_food_name") {
-      state.currentFood = msg.text.trim();
-      state.step = "ask_custom_price";
-
-      return ctx.reply(
-        `💲 Enter the price for *${state.currentFood}*:\n\n(If unknown, send 0)`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    // --- Step 3: Food Price ---
-    if (state.step === "ask_custom_price") {
-      const price = Number(msg.text);
-
-      if (isNaN(price) || price < 0)
-        return ctx.reply("⚠️ Invalid price. Enter a number or 0.");
-
-      state.currentFoodPrice = price;
-      state.step = "waiting_for_quantity";
-
-      return ctx.reply(`🔢 Enter quantity for *${state.currentFood}*:`, {
-        parse_mode: "Markdown",
-      });
-    }
-
-    // --- Step 4: Quantity ---
-    if (state.step === "waiting_for_quantity") {
-      const quantity = Number(msg.text);
-
-      if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
-        return ctx.reply("⚠️ Enter a valid whole number.");
-
-      // Save the food item
-      state.foods.push({
-        name: state.currentFood!,
-        quantity,
-        price: state.currentFoodPrice!,
-      });
-
-      // Reset temp fields
-      state.currentFood = undefined;
-      state.currentFoodPrice = undefined;
-      state.step = "select_food";
-
-      return ctx.reply("✅ Added! Select another food or press Done:", {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("➕ Add Custom Food", "custom_food")],
-          [Markup.button.callback("✅ Done", "done_food")],
-        ]).reply_markup,
-      });
-    }
-  });
   bot.action("custom_food", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
