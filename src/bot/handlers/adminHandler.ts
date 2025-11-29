@@ -518,6 +518,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       ])
     );
   });
+
   bot.action(/admin_request_approve_(\d+)/, async (ctx) => {
     const requestId = Number(ctx.match[1]);
 
@@ -528,18 +529,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         .eq("id", requestId)
         .maybeSingle();
 
-      if (!request) {
-        return ctx.reply("❌ Request not found.");
-      }
-
-      await supabase.from("users").upsert(
-        {
-          id: request.user_id.toString(),
-          name: request.full_name,
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      );
+      if (!request) return ctx.reply("❌ Request not found.");
 
       await supabase.from("contracts").upsert(
         {
@@ -563,7 +553,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         { parse_mode: "Markdown" }
       );
 
-      return ctx.reply(
+      return ctx.editMessageText(
         `✅ Request #${requestId} approved and contract created.`
       );
     } catch (err) {
@@ -574,13 +564,32 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   bot.action(/admin_request_reject_(\d+)/, async (ctx) => {
     const requestId = Number(ctx.match[1]);
-    await supabase
-      .from("contract_requests")
-      .update({ status: "rejected" })
-      .eq("id", requestId);
 
-    await ctx.editMessageText(`❌ Request #${requestId} rejected`);
-    return ctx.answerCbQuery();
+    try {
+      await supabase
+        .from("contract_requests")
+        .update({ status: "rejected" })
+        .eq("id", requestId);
+
+      const { data: request } = await supabase
+        .from("contract_requests")
+        .select("*")
+        .eq("id", requestId)
+        .maybeSingle();
+      if (request?.user_id) {
+        await ctx.telegram.sendMessage(
+          request.user_id,
+          `❌ Your contract request has been rejected.`
+        );
+      }
+
+      return ctx.editMessageText(`❌ Request #${requestId} rejected`);
+    } catch (err) {
+      console.error("Admin reject contract error:", err);
+      return ctx.answerCbQuery("❌ Failed to reject request.", {
+        show_alert: true,
+      });
+    }
   });
 
   bot.action("admin_dashboard", async (ctx) => {

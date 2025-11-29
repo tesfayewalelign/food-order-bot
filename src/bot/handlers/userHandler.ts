@@ -129,14 +129,17 @@ export function handleUserFlow(
       if (state.step === "custom_restaurant_name" && isTextMessage(msg)) {
         state.restaurant = msg.text.trim();
         state.restaurantId = undefined;
-        state.step = "select_food";
+        state.step = "select_meal_type";
 
-        return ctx.reply(`🍴 Select foods from *${state.restaurant}*:`, {
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback("🥗 Lunch", "meal_lunch")],
+          [Markup.button.callback("🌙 Dinner", "meal_dinner")],
+          [Markup.button.callback("🔙 Back", "back_to_restaurants")],
+        ]);
+
+        return ctx.reply(`🍴 *${state.restaurant}*\nPlease choose meal type:`, {
           parse_mode: "Markdown",
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback("➕ Add Custom Food", "custom_food")],
-            [Markup.button.callback("✅ Done", "done_food")],
-          ]).reply_markup,
+          reply_markup: keyboard.reply_markup,
         });
       }
 
@@ -345,6 +348,8 @@ export function handleUserFlow(
       Markup.inlineKeyboard([]);
 
     keyboard.reply_markup.inline_keyboard.push([
+      Markup.button.callback("➕ Add Custom Food", "custom_food"),
+      Markup.button.callback("✅ Done", "done_food"),
       Markup.button.callback("🔙 Back", "back_to_meal"),
     ]);
 
@@ -355,6 +360,7 @@ export function handleUserFlow(
 
     return ctx.answerCbQuery();
   });
+
   bot.action("back_to_restaurants", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -550,7 +556,7 @@ export function handleUserFlow(
             }`.trim() || null,
           created_at: new Date().toISOString(),
         },
-        { onConflict: "id" }
+        { onConflict: "telegram_id" }
       );
 
       if (userError) {
@@ -561,7 +567,20 @@ export function handleUserFlow(
         );
       }
 
-      // Get profile info
+      const { data: existingRequest } = await supabase
+        .from("contract_requests")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .maybeSingle();
+
+      if (existingRequest) {
+        return ctx.answerCbQuery(
+          "⚠️ You already have a pending contract request.",
+          { show_alert: true }
+        );
+      }
+
       const { data: profile } = await supabase
         .from("profiles")
         .select("name, phone")
@@ -571,8 +590,28 @@ export function handleUserFlow(
       const fullName =
         profile?.name ||
         `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
-
       const phone = profile?.phone || "Not Provided";
+
+      const { data: request, error: insertError } = await supabase
+        .from("contract_requests")
+        .insert([
+          {
+            user_id: userId,
+            full_name: fullName,
+            phone: phone,
+            status: "pending",
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select("*")
+        .single();
+
+      if (insertError || !request) {
+        console.error("Insert contract request error:", insertError);
+        return ctx.answerCbQuery("❌ Failed to send contract request.", {
+          show_alert: true,
+        });
+      }
 
       for (const adminId of ADMIN_IDS) {
         await ctx.telegram.sendMessage(
@@ -582,25 +621,25 @@ export function handleUserFlow(
             `📱 *Phone:* ${phone}\n` +
             `🔗 *Username:* @${ctx.from!.username || "N/A"}\n` +
             `🆔 *Telegram ID:* ${userId}\n\n` +
-            `Please review in Admin → Requests.`,
+            `Please review in Admin → Requests.\n` +
+            `Approve: /admin_request_approve_${request.id}  |  Reject: /admin_request_reject_${request.id}`,
           { parse_mode: "Markdown" }
         );
       }
-      if (ctx.callbackQuery) {
-        await ctx.editMessageText(
-          "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
-          {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
-              ],
-            },
-          }
-        );
-      }
 
-      if (ctx.callbackQuery) return ctx.answerCbQuery();
+      await ctx.editMessageText(
+        "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+            ],
+          },
+        }
+      );
+
+      return ctx.answerCbQuery();
     } catch (err) {
       console.error("Request contract error:", err);
       return ctx.answerCbQuery("❌ Something went wrong. Try again later.", {
