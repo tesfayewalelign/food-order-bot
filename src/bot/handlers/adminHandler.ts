@@ -53,7 +53,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       ...adminMainKeyboard(),
     });
   });
-
   bot.on("text", async (ctx, next) => {
     const adminId = ctx.from?.id;
     if (!adminId || !ADMIN_IDS.includes(adminId)) return next();
@@ -61,6 +60,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!state) return next();
 
     const text = ctx.message.text.trim();
+
     try {
       switch (state.action) {
         case "add_restaurant": {
@@ -69,8 +69,10 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
             .insert([{ name: text }]);
           if (error) return ctx.reply("❌ Failed to add restaurant.");
           await ctx.reply(`✅ Restaurant "${text}" added!`);
+          adminStates.delete(adminId); // Remove state after done
           break;
         }
+
         case "edit_restaurant": {
           if (!state.restaurantId) break;
           await supabase
@@ -78,35 +80,58 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
             .update({ name: text })
             .eq("id", state.restaurantId);
           await ctx.reply("✏️ Restaurant updated.");
+          adminStates.delete(adminId);
           break;
         }
+
         case "add_food": {
           if (!state.restaurantId) break;
           const [name, priceStr] = text.split("|").map((p) => p.trim());
           const price = Number(priceStr);
           if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
+
           await supabase
             .from("foods")
             .insert([{ name, price, restaurant_id: state.restaurantId }]);
-          await ctx.reply(`✅ Food "${name}" added at ${price} ETB`);
+
+          // Keep the state so admin can add multiple foods
+          adminStates.set(adminId, state);
+
+          await ctx.reply(
+            `✅ Food "${name}" added at ${price} ETB\nSend next food or press 🔙 Done`,
+            Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  "🔙 Back",
+                  `admin_foods_for_${state.restaurantId}`
+                ),
+              ],
+              [Markup.button.callback("✅ Done", "admin_foods")],
+            ])
+          );
           break;
         }
+
         case "edit_food": {
           if (!state.foodId) break;
           const [name, priceStr] = text.split("|").map((p) => p.trim());
           const price = Number(priceStr);
           if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
+
           await supabase
             .from("foods")
             .update({ name, price })
             .eq("id", state.foodId);
           await ctx.reply("✏️ Food updated.");
+          adminStates.delete(adminId);
           break;
         }
+
         case "add_rider": {
           const [name, phone, campus] = text.split("|").map((s) => s.trim());
           if (!name || !phone || !campus)
             return ctx.reply("⚠️ Invalid format. Use: Name | Phone | Campus");
+
           const secretCode = generateSecretCode();
           const { error } = await supabase
             .from("riders")
@@ -114,18 +139,22 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
               { name, phone, campus, secret_code: secretCode, active: true },
             ]);
           if (error) return ctx.reply("❌ Failed to add rider.");
+
           await ctx.reply(
             `✅ Rider "${name}" added!\nSecret code: ${secretCode}\nSend this code to the rider to activate: /activate ${secretCode}`
           );
+          adminStates.delete(adminId);
           break;
         }
+
+        default:
+          return next();
       }
     } catch (err) {
       console.error("[ADMIN] text error:", err);
       await ctx.reply("❌ An error occurred.");
-    } finally {
-      adminStates.delete(adminId);
     }
+
     await next();
   });
 

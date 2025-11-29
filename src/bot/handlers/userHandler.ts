@@ -108,12 +108,23 @@ export function handleUserFlow(
         state.currentFood = undefined;
         state.currentFoodPrice = undefined;
 
-        if (!state.restaurantId) return ctx.reply("⚠️ No restaurant selected.");
-
-        const keyboard = await getFoodKeyboard(state.restaurantId);
-        return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
-          reply_markup: keyboard?.reply_markup,
-        });
+        if (state.restaurantId) {
+          const keyboard = await getFoodKeyboard(
+            state.restaurantId,
+            state.mealType
+          );
+          return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
+            reply_markup: keyboard?.reply_markup,
+          });
+        } else {
+          state.step = "custom_food_name";
+          return ctx.reply(
+            "✅ Added! Type the name of the next custom food or press ✅ Done.",
+            Markup.inlineKeyboard([
+              [Markup.button.callback("✅ Done", "done_food")],
+            ])
+          );
+        }
       }
       if (state.step === "custom_restaurant_name" && isTextMessage(msg)) {
         state.restaurant = msg.text.trim();
