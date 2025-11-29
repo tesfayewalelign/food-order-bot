@@ -342,7 +342,7 @@ export function handleUserFlow(
       return ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
 
     state.step = "custom_restaurant_name";
-    state.restaurantId = undefined;
+    state.restaurant = undefined; // Reset
 
     await ctx.reply("✏️ Type the name of your restaurant or café:", {
       reply_markup: Markup.inlineKeyboard([
@@ -352,7 +352,6 @@ export function handleUserFlow(
 
     return ctx.answerCbQuery();
   });
-
   bot.on("message", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -360,6 +359,7 @@ export function handleUserFlow(
 
     if (!state || !isTextMessage(msg)) return;
 
+    // --- Step 1: Restaurant Name ---
     if (state.step === "custom_restaurant_name") {
       state.restaurant = msg.text.trim();
       state.step = "select_food";
@@ -373,19 +373,20 @@ export function handleUserFlow(
       });
     }
 
+    // --- Step 2: Food Name ---
     if (state.step === "custom_food_name") {
       state.currentFood = msg.text.trim();
       state.step = "ask_custom_price";
 
       return ctx.reply(
-        `💲 Enter the price for *${state.currentFood}*:\n\n` +
-          `➡ If you don't know the price, send *0*.`,
+        `💲 Enter the price for *${state.currentFood}*:\n\n(If unknown, send 0)`,
         { parse_mode: "Markdown" }
       );
     }
 
+    // --- Step 3: Food Price ---
     if (state.step === "ask_custom_price") {
-      let price = Number(msg.text);
+      const price = Number(msg.text);
 
       if (isNaN(price) || price < 0)
         return ctx.reply("⚠️ Invalid price. Enter a number or 0.");
@@ -398,23 +399,26 @@ export function handleUserFlow(
       });
     }
 
+    // --- Step 4: Quantity ---
     if (state.step === "waiting_for_quantity") {
       const quantity = Number(msg.text);
 
       if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
         return ctx.reply("⚠️ Enter a valid whole number.");
 
+      // Save the food item
       state.foods.push({
         name: state.currentFood!,
         quantity,
         price: state.currentFoodPrice!,
       });
 
+      // Reset temp fields
       state.currentFood = undefined;
       state.currentFoodPrice = undefined;
       state.step = "select_food";
 
-      return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
+      return ctx.reply("✅ Added! Select another food or press Done:", {
         reply_markup: Markup.inlineKeyboard([
           [Markup.button.callback("➕ Add Custom Food", "custom_food")],
           [Markup.button.callback("✅ Done", "done_food")],
@@ -422,7 +426,6 @@ export function handleUserFlow(
       });
     }
   });
-
   bot.action("custom_food", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
@@ -618,19 +621,21 @@ export function handleUserFlow(
           { parse_mode: "Markdown" }
         );
       }
-      await ctx.editMessageText(
-        "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
-            ],
-          },
-        }
-      );
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(
+          "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+              ],
+            },
+          }
+        );
+      }
 
-      return ctx.answerCbQuery();
+      if (ctx.callbackQuery) return ctx.answerCbQuery();
     } catch (err) {
       console.error("Request contract error:", err);
       return ctx.answerCbQuery("❌ Something went wrong. Try again later.", {
