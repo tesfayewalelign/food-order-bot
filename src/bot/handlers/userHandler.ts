@@ -482,7 +482,10 @@ export function handleUserFlow(
       const { error: userError } = await supabase.from("users").upsert(
         {
           id: userId,
-          username: ctx.from!.username || null,
+          name:
+            `${ctx.from!.first_name ?? ""} ${
+              ctx.from!.last_name ?? ""
+            }`.trim() || null,
           created_at: new Date().toISOString(),
         },
         { onConflict: "id" }

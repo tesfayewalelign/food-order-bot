@@ -11,7 +11,8 @@ export interface User {
   campus: string | null;
   is_contract: boolean;
   contract_count: number;
-  created_at: string; // or Date
+  created_at: string;
+  username: string;
 }
 
 export interface UserState {
