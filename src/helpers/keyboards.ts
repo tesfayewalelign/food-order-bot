@@ -66,6 +66,12 @@ export async function getRestaurantKeyboard() {
     if (error || !restaurants || restaurants.length === 0) {
       return Markup.inlineKeyboard([
         [Markup.button.callback("ℹ️ No restaurants available", "none")],
+        [
+          Markup.button.callback(
+            "➕ Other / Custom Restaurant",
+            "custom_restaurant"
+          ),
+        ],
       ]);
     }
 
@@ -86,11 +92,25 @@ export async function getRestaurantKeyboard() {
       buttons.push(row);
     }
 
+    // ✅ Add "Custom Restaurant" as the LAST row
+    buttons.push([
+      Markup.button.callback(
+        "➕ Other / Custom Restaurant",
+        "custom_restaurant"
+      ),
+    ]);
+
     return Markup.inlineKeyboard(buttons);
   } catch (err) {
     console.error("[Restaurant Keyboard] Unexpected error:", err);
     return Markup.inlineKeyboard([
       [Markup.button.callback("ℹ️ No restaurants available", "none")],
+      [
+        Markup.button.callback(
+          "➕ Other / Custom Restaurant",
+          "custom_restaurant"
+        ),
+      ],
     ]);
   }
 }

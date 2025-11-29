@@ -505,15 +505,14 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       await supabase.from("users").upsert(
         {
-          id: request.user_id,
-          username: request.username || null,
-          full_name: request.full_name,
+          id: request.user_id.toString(), // ensure string for users.id
+          name: request.full_name,
           created_at: new Date().toISOString(),
         },
         { onConflict: "id" }
       );
 
-      const { error: contractError } = await supabase.from("contracts").upsert(
+      await supabase.from("contracts").upsert(
         {
           user_id: request.user_id,
           order_limit: 30,
@@ -523,11 +522,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         },
         { onConflict: "user_id" }
       );
-
-      if (contractError) {
-        console.error("Error creating/updating contract:", contractError);
-        return ctx.reply("❌ Error creating/updating contract.");
-      }
 
       await supabase
         .from("contract_requests")

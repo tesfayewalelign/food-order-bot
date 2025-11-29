@@ -561,7 +561,6 @@ export function handleUserFlow(
 
     return ctx.answerCbQuery();
   });
-
   bot.action("request_contract", async (ctx) => {
     const userId = ctx.from!.id;
 
@@ -586,34 +585,7 @@ export function handleUserFlow(
         );
       }
 
-      const { data: activeContract } = await supabase
-        .from("contracts")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("is_active", true)
-        .maybeSingle();
-
-      if (activeContract) {
-        return ctx.answerCbQuery(
-          "✔️ You already have an active contract! You can order with it.",
-          { show_alert: true }
-        );
-      }
-
-      const { data: pendingRequest } = await supabase
-        .from("contract_requests")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("status", "pending")
-        .maybeSingle();
-
-      if (pendingRequest) {
-        return ctx.answerCbQuery(
-          "⏳ Your contract request is still pending. Please wait for admin approval.",
-          { show_alert: true }
-        );
-      }
-
+      // Get profile info
       const { data: profile } = await supabase
         .from("profiles")
         .select("name, phone")
@@ -623,29 +595,8 @@ export function handleUserFlow(
       const fullName =
         profile?.name ||
         `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
+
       const phone = profile?.phone || "Not Provided";
-
-      const { data: insertedData, error: insertError } = await supabase
-        .from("contract_requests")
-        .insert({
-          user_id: userId,
-          username: ctx.from!.username || "N/A",
-          full_name: fullName,
-          phone,
-          status: "pending",
-          created_at: new Date().toISOString(),
-        })
-        .select();
-
-      if (insertError) {
-        console.error("Insert contract request error:", insertError);
-        return ctx.answerCbQuery(
-          `❌ Failed to send request. DB Error: ${insertError.message}`,
-          { show_alert: true }
-        );
-      }
-
-      console.log("Inserted request:", insertedData);
 
       for (const adminId of ADMIN_IDS) {
         await ctx.telegram.sendMessage(
@@ -659,7 +610,6 @@ export function handleUserFlow(
           { parse_mode: "Markdown" }
         );
       }
-
       await ctx.editMessageText(
         "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
         {
@@ -680,6 +630,7 @@ export function handleUserFlow(
       });
     }
   });
+
   bot.action("back_to_food_selection", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
