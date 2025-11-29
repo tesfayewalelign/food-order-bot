@@ -116,7 +116,7 @@ export function handleUserFlow(
 
       if (state.step === "custom_restaurant_name" && isTextMessage(msg)) {
         state.restaurant = msg.text.trim();
-        state.restaurantId = undefined; // it's a user-added restaurant
+        state.restaurantId = undefined;
         state.step = "select_meal_type";
 
         const keyboard = Markup.inlineKeyboard([
@@ -344,7 +344,7 @@ export function handleUserFlow(
     state.step = "custom_restaurant_name";
     state.restaurantId = undefined;
 
-    await ctx.editMessageText("✏️ Type the name of your restaurant or café:", {
+    await ctx.reply("✏️ Type the name of your restaurant or café:", {
       reply_markup: Markup.inlineKeyboard([
         [Markup.button.callback("🔙 Back", "back_to_meal")],
       ]).reply_markup,
@@ -353,45 +353,54 @@ export function handleUserFlow(
     return ctx.answerCbQuery();
   });
 
-  // Capture Custom Restaurant Name
   bot.on("message", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
     const msg = ctx.message;
+
     if (!state || !isTextMessage(msg)) return;
 
     if (state.step === "custom_restaurant_name") {
       state.restaurant = msg.text.trim();
       state.step = "select_food";
 
-      const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback("Add Custom Food", "custom_food")],
-        [Markup.button.callback("✅ Done", "done_food")],
-      ]);
-
-      await ctx.editMessageText(`🍴 Select foods from ${state.restaurant}:`, {
+      return ctx.reply(`🍴 Select foods from *${state.restaurant}*:`, {
         parse_mode: "Markdown",
-        reply_markup: keyboard.reply_markup,
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("➕ Add Custom Food", "custom_food")],
+          [Markup.button.callback("✅ Done", "done_food")],
+        ]).reply_markup,
       });
     }
 
-    // Custom Food Name
     if (state.step === "custom_food_name") {
       state.currentFood = msg.text.trim();
-      state.currentFoodPrice = 0; // price unknown
-      state.step = "waiting_for_quantity";
+      state.step = "ask_custom_price";
 
       return ctx.reply(
-        `🍽 You selected *${state.currentFood}*.\nEnter quantity:`,
-        {
-          parse_mode: "Markdown",
-        }
+        `💲 Enter the price for *${state.currentFood}*:\n\n` +
+          `➡ If you don't know the price, send *0*.`,
+        { parse_mode: "Markdown" }
       );
     }
 
-    // Quantity for custom food
+    if (state.step === "ask_custom_price") {
+      let price = Number(msg.text);
+
+      if (isNaN(price) || price < 0)
+        return ctx.reply("⚠️ Invalid price. Enter a number or 0.");
+
+      state.currentFoodPrice = price;
+      state.step = "waiting_for_quantity";
+
+      return ctx.reply(`🔢 Enter quantity for *${state.currentFood}*:`, {
+        parse_mode: "Markdown",
+      });
+    }
+
     if (state.step === "waiting_for_quantity") {
       const quantity = Number(msg.text);
+
       if (!quantity || quantity <= 0 || !Number.isInteger(quantity))
         return ctx.reply("⚠️ Enter a valid whole number.");
 
@@ -405,13 +414,11 @@ export function handleUserFlow(
       state.currentFoodPrice = undefined;
       state.step = "select_food";
 
-      const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback("Add Custom Food", "custom_food")],
-        [Markup.button.callback("✅ Done", "done_food")],
-      ]);
-
       return ctx.reply("✅ Added! Select another food or press ✅ Done.", {
-        reply_markup: keyboard.reply_markup,
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("➕ Add Custom Food", "custom_food")],
+          [Markup.button.callback("✅ Done", "done_food")],
+        ]).reply_markup,
       });
     }
   });
@@ -423,6 +430,7 @@ export function handleUserFlow(
       return ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
 
     state.step = "custom_food_name";
+
     await ctx.reply("✏️ Type the name of your custom food:");
     return ctx.answerCbQuery();
   });
@@ -567,7 +575,7 @@ export function handleUserFlow(
     try {
       const { error: userError } = await supabase.from("users").upsert(
         {
-          id: userId,
+          telegram_id: userId,
           name:
             `${ctx.from!.first_name ?? ""} ${
               ctx.from!.last_name ?? ""

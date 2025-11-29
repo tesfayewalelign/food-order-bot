@@ -505,7 +505,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       await supabase.from("users").upsert(
         {
-          id: request.user_id.toString(), // ensure string for users.id
+          id: request.user_id.toString(),
           name: request.full_name,
           created_at: new Date().toISOString(),
         },
