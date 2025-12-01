@@ -541,16 +541,18 @@ export function handleUserFlow(
     const userId = ctx.from!.id;
 
     try {
+      // STEP 1: UPSERT USER INTO users TABLE
+      const fullNameFromTelegram = `${ctx.from!.first_name ?? ""} ${
+        ctx.from!.last_name ?? ""
+      }`.trim();
+
       const { error: userError } = await supabase.from("users").upsert(
         {
           telegram_id: userId,
-          name:
-            `${ctx.from!.first_name ?? ""} ${
-              ctx.from!.last_name ?? ""
-            }`.trim() || null,
+          name: fullNameFromTelegram || null,
           created_at: new Date().toISOString(),
         },
-        { onConflict: "telegram_id" }
+        { onConflict: "telegram_id" } // MUST BE UNIQUE IN YOUR DB
       );
 
       if (userError) {
@@ -563,23 +565,25 @@ export function handleUserFlow(
         );
       }
 
+      // STEP 2: GET PROFILE DETAILS IF EXISTS
       const { data: profile } = await supabase
         .from("profiles")
         .select("name, phone")
         .eq("telegram_id", userId)
         .maybeSingle();
 
-      const fullName =
-        profile?.name ||
-        `${ctx.from!.first_name ?? ""} ${ctx.from!.last_name ?? ""}`.trim();
+      const finalFullName =
+        profile?.name?.trim() || fullNameFromTelegram || "Unknown User";
+
       const phone = profile?.phone || "Not Provided";
 
+      // STEP 3: INSERT CONTRACT REQUEST
       const { error: requestError } = await supabase
         .from("contract_requests")
         .insert([
           {
             user_id: userId,
-            full_name: fullName,
+            full_name: finalFullName,
             status: "pending",
             created_at: new Date().toISOString(),
           },
@@ -588,34 +592,41 @@ export function handleUserFlow(
       if (requestError) {
         console.error("Error inserting contract request:", requestError);
         return ctx.answerCbQuery(
-          "❌ Failed to request contract. Try again later.",
+          "❌ Failed to submit contract request. Please try again.",
           {
             show_alert: true,
           }
         );
       }
 
+      // STEP 4: NOTIFY ADMINS
       for (const adminId of ADMIN_IDS) {
         await ctx.telegram.sendMessage(
           adminId,
           `📥 *New Contract Request*\n\n` +
-            `👤 *Name:* ${fullName}\n` +
+            `👤 *Name:* ${finalFullName}\n` +
             `📱 *Phone:* ${phone}\n` +
             `🔗 *Username:* @${ctx.from!.username || "N/A"}\n` +
             `🆔 *Telegram ID:* ${userId}\n\n` +
-            `Please review in Admin → Requests.`,
+            `Please check Admin → Requests.`,
           { parse_mode: "Markdown" }
         );
       }
 
+      // STEP 5: EDIT USER MESSAGE
       if (ctx.callbackQuery) {
         await ctx.editMessageText(
-          "📨 *Your contract request has been sent!*\nPlease wait for an admin to approve it.",
+          "📨 *Your contract request has been submitted!*\nPlease wait for an admin to approve it.",
           {
             parse_mode: "Markdown",
             reply_markup: {
               inline_keyboard: [
-                [{ text: "💵 Pay on Delivery", callback_data: "delivery_new" }],
+                [
+                  {
+                    text: "💵 Pay on Delivery",
+                    callback_data: "delivery_new",
+                  },
+                ],
               ],
             },
           }
@@ -625,7 +636,7 @@ export function handleUserFlow(
       return ctx.answerCbQuery();
     } catch (err) {
       console.error("Request contract error:", err);
-      return ctx.answerCbQuery("❌ Something went wrong. Try again later.", {
+      return ctx.answerCbQuery("❌ Unexpected error. Try again later.", {
         show_alert: true,
       });
     }
