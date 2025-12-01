@@ -169,12 +169,6 @@ export function handleUserFlow(
       if (isTextMessage(msg)) {
         switch (msg.text) {
           case "🍔 Order Food":
-            if (!isOrderTime()) {
-              return ctx.reply(
-                `⏰ Sorry! Ordering is only allowed during the allowed time.\n` +
-                  `Next order window opens at: ${nextOrderWindow()}`
-              );
-            }
             state.step = "profile_ask_campus";
             return ctx.reply("🍔 Choose your campus:", campusKeyboard);
 
