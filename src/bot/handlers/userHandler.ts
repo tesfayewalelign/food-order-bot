@@ -785,6 +785,7 @@ export function handleUserFlow(
     );
 
     try {
+      let newRemaining: number | undefined;
       if (state.deliveryType === "contract") {
         const contract = await getUserContract(userId);
 
@@ -795,14 +796,25 @@ export function handleUserFlow(
           );
         }
 
-        if (!contract.is_active || contract.remaining_orders <= 0) {
+        // Calculate total quantity of foods in this order
+        const totalFoodQuantity = state.foods.reduce(
+          (acc, f) => acc + f.quantity,
+          0
+        );
+
+        if (
+          !contract.is_active ||
+          contract.remaining_orders < totalFoodQuantity
+        ) {
           return ctx.answerCbQuery(
-            "⚠️ Your contract orders are exhausted. Contact admin to reactivate.",
+            "⚠️ You do not have enough remaining contract orders. Contact admin to top-up.",
             { show_alert: true }
           );
         }
 
-        const newRemaining = contract.remaining_orders - 1;
+        // Deduct total food quantity from remaining_orders
+        const newRemaining = contract.remaining_orders - totalFoodQuantity;
+
         await supabase
           .from("contracts")
           .update({ remaining_orders: newRemaining })
@@ -877,7 +889,7 @@ export function handleUserFlow(
                 state.phone
               })\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}\n🍴 Meal Type: ${
                 state.mealType || "N/A"
-              }`,
+              }\n🔢 Remaining Contract Orders: ${newRemaining ?? "N/A"}`,
 
               {
                 parse_mode: "Markdown",

@@ -220,7 +220,7 @@ export async function getUserContract(userId: number) {
   const { data: contract, error } = await supabase
     .from("contracts")
     .select("*")
-    .or(`user_id.eq.${userId},telegram_id.eq.${userId}`)
+    .eq("user_id", userId)
     .eq("is_active", true)
     .maybeSingle();
 
@@ -229,5 +229,5 @@ export async function getUserContract(userId: number) {
     return null;
   }
 
-  return contract || null;
+  return contract ?? null;
 }
