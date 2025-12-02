@@ -48,6 +48,7 @@ export interface UserState {
 
   restaurantId?: string;
   mealType?: string;
+  isRider?: boolean;
 }
 
 export const userState = new Map<number, UserState>();

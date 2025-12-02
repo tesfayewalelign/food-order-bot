@@ -23,6 +23,7 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!userId) return;
 
     try {
+      // --- Admin check ---
       if (ADMIN_IDS.includes(userId)) {
         return ctx.reply(
           `👋 Welcome Admin ${ctx.from?.first_name}!`,
@@ -32,6 +33,32 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       resetUserState(userId);
 
+      // --- Rider check ---
+      const { data: rider } = await supabase
+        .from("riders")
+        .select("*")
+        .eq("telegram_id", userId)
+        .maybeSingle();
+
+      if (rider && rider.active) {
+        userState.set(userId, {
+          isRider: true,
+          campus: rider.campus,
+          step: "idle",
+          username: ctx.from?.username,
+          name: rider.name,
+          phone: rider.phone,
+          foods: [],
+          cartFoods: [],
+          deliveryType: undefined,
+        });
+
+        return ctx.reply(
+          `👋 Welcome Rider ${rider.name}! You are active in campus: ${rider.campus}`
+        );
+      }
+
+      // --- Normal user check ---
       const { data: profile } = await supabase
         .from("profiles")
         .select("telegram_id, name, phone, campus")
@@ -57,7 +84,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
   });
 
-  // --- Handle new user registration flow ---
   bot.on("message", async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId) return next();
@@ -67,7 +93,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     const msg: any = ctx.message;
 
-    // 1️⃣ Ask full name
     if (state.step === "profile_ask_name" && "text" in msg) {
       state.name = msg.text.trim();
       state.step = "profile_ask_phone";
@@ -81,7 +106,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       );
     }
 
-    // 2️⃣ Ask phone via Telegram contact
     if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
       state.phone = msg.contact.phone_number;
       state.step = "profile_ask_campus";
@@ -90,7 +114,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       return ctx.reply("🏫 Select your campus:", campusKeyboard);
     }
 
-    // 3️⃣ Ask campus
     if (state.step === "profile_ask_campus" && "text" in msg) {
       state.campus = msg.text.trim();
       state.step = "idle";
@@ -111,7 +134,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     return next();
   });
 
-  // --- Existing /activate command ---
   bot.command("activate", async (ctx) => {
     const text = ctx.message?.text ?? "";
     const parts = text.split(" ");

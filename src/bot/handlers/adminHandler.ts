@@ -29,6 +29,18 @@ function isTextMessage(
   return !!ctx.message && typeof (ctx.message as any).text === "string";
 }
 
+export const CAMPUS_KEYS = {
+  MAIN_BOYS_WHITES_HOUSE: "campus_main_boys_whites_house",
+  MAIN_BOYS_AFRICA: "campus_main_boys_africa",
+  MAIN_GIRLS_WHITE_HOUSE: "campus_main_girls_white_house",
+  MAIN_GIRLS_AFRICA_HOUSE: "campus_main_girls_africa_house",
+  TECHNO_BOYS: "campus_techno_boys",
+  TECHNO_GIRLS: "campus_techno_girls",
+  AGRI_CAMPUS: "campus_agri",
+} as const;
+
+export type CampusKey = (typeof CAMPUS_KEYS)[keyof typeof CAMPUS_KEYS];
+
 function adminMainKeyboard() {
   return Markup.inlineKeyboard(
     [
@@ -128,16 +140,31 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         }
 
         case "add_rider": {
-          const [name, phone, campus] = text.split("|").map((s) => s.trim());
-          if (!name || !phone || !campus)
-            return ctx.reply("⚠️ Invalid format. Use: Name | Phone | Campus");
+          const [name, phone, campusKey] = text.split("|").map((s) => s.trim());
+
+          if (
+            !name ||
+            !phone ||
+            !campusKey ||
+            !Object.values(CAMPUS_KEYS).includes(campusKey as CampusKey)
+          ) {
+            return ctx.reply(
+              "⚠️ Invalid format or campus key. Available keys:\n" +
+                Object.values(CAMPUS_KEYS).join("\n")
+            );
+          }
 
           const secretCode = generateSecretCode();
-          const { error } = await supabase
-            .from("riders")
-            .insert([
-              { name, phone, campus, secret_code: secretCode, active: true },
-            ]);
+          const { error } = await supabase.from("riders").insert([
+            {
+              name,
+              phone,
+              campus: campusKey,
+              secret_code: secretCode,
+              active: true,
+              telegram_id: null,
+            },
+          ]);
           if (error) return ctx.reply("❌ Failed to add rider.");
 
           await ctx.reply(
@@ -327,8 +354,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.action("admin_rider_add", async (ctx) => {
     await ctx.answerCbQuery();
     adminStates.set(ctx.from!.id, { action: "add_rider" });
+
+    const campusList = Object.values(CAMPUS_KEYS)
+      .map((key) => `- ${key}`)
+      .join("\n");
+
     await ctx.editMessageText(
-      "🏗 Send rider info in this format:\nName | Phone | Campus"
+      `🏗 Send rider info in this format:\nName | Phone | CampusKey\n\nAvailable campus keys:\n${campusList}`
     );
   });
 
