@@ -221,13 +221,6 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
 
-    if (order.telegram_id) {
-      await ctx.telegram.sendMessage(
-        order.telegram_id,
-        `❌ Your order was rejected by rider ${ctx.from?.first_name}`
-      );
-    }
-
     for (const adminId of ADMIN_IDS) {
       await ctx.telegram.sendMessage(
         adminId,

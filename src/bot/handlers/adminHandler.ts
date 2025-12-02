@@ -459,7 +459,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await ctx.answerCbQuery();
     const { data: contracts, error } = await supabase
       .from("contracts")
-      .select("*")
+      .select("*, users(name, phone, campus)")
       .order("created_at", { ascending: false });
 
     if (error || !contracts || contracts.length === 0)
@@ -478,18 +478,33 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   bot.action(/admin_contract_view_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
+
     const id = ctx.match[1];
-    const { data: c } = await supabase
+
+    const { data: c, error } = await supabase
       .from("contracts")
-      .select("*")
+      .select("*, users(name, phone, campus)")
       .eq("id", id)
       .maybeSingle();
 
-    if (!c)
+    if (error || !c)
       return ctx.answerCbQuery("⚠️ Contract not found", { show_alert: true });
 
     await ctx.editMessageText(
-      `📦 Contract ID: ${c.id}\nTitle: ${c.title || "-"}\nStatus: ${c.status}`,
+      `📦 **Contract Details**  
+ID: ${c.id}  
+Active: ${c.is_active ? "Yes" : "No"}  
+Created: ${new Date(c.created_at).toLocaleString()}
+
+👤 **User Info**  
+Name: ${c.users?.name || "Unknown"}  
+Phone: ${c.users?.phone || "-"}  
+Campus: ${c.users?.campus || "-"}
+
+📊 **Order Details**  
+Order Limit: ${c.order_limit}  
+Remaining Orders: ${c.remaining_orders}
+    `,
       Markup.inlineKeyboard([
         [Markup.button.callback("🔙 Back", "admin_contracts")],
       ])
