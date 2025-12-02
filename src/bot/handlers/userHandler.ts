@@ -232,7 +232,7 @@ export function handleUserFlow(
         show_alert: true,
       });
 
-    state.campus = data.replace("campus_", "").replace(/_/g, " ");
+    state.campus = data;
 
     if (state.step === "profile_ask_campus") {
       await supabase.from("profiles").upsert(
@@ -867,14 +867,7 @@ export function handleUserFlow(
         .select("telegram_id, campus")
         .eq("active", true);
 
-      const clean = (s: string) =>
-        s
-          .toLowerCase()
-          .replace(/[\s_]+/g, "")
-          .trim();
-      const campusRiders = riders?.filter(
-        (r) => clean(r.campus ?? "") === clean(state.campus ?? "")
-      );
+      const campusRiders = riders?.filter((r) => r.campus === state.campus);
 
       if (campusRiders?.length) {
         for (const r of campusRiders) {

@@ -81,7 +81,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
             .insert([{ name: text }]);
           if (error) return ctx.reply("❌ Failed to add restaurant.");
           await ctx.reply(`✅ Restaurant "${text}" added!`);
-          adminStates.delete(adminId); // Remove state after done
+          adminStates.delete(adminId);
           break;
         }
 
@@ -106,7 +106,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
             .from("foods")
             .insert([{ name, price, restaurant_id: state.restaurantId }]);
 
-          // Keep the state so admin can add multiple foods
           adminStates.set(adminId, state);
 
           await ctx.reply(
@@ -124,37 +123,36 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           break;
         }
 
-        case "edit_food": {
-          if (!state.foodId) break;
-          const [name, priceStr] = text.split("|").map((p) => p.trim());
-          const price = Number(priceStr);
-          if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
-
-          await supabase
-            .from("foods")
-            .update({ name, price })
-            .eq("id", state.foodId);
-          await ctx.reply("✏️ Food updated.");
-          adminStates.delete(adminId);
-          break;
-        }
-
         case "add_rider": {
-          const [name, phone, campusKey] = text.split("|").map((s) => s.trim());
+          const [name, phone, campusRaw] = text.split("|").map((s) => s.trim());
 
-          if (
-            !name ||
-            !phone ||
-            !campusKey ||
-            !Object.values(CAMPUS_KEYS).includes(campusKey as CampusKey)
-          ) {
+          if (!name || !phone || !campusRaw) {
             return ctx.reply(
-              "⚠️ Invalid format or campus key. Available keys:\n" +
+              "⚠️ Invalid format.\nUse:\nName | Phone | Campus\n\nExample:\nBekele | 0977262232 | techno boys"
+            );
+          }
+
+          const cleanCampus = campusRaw
+            .toLowerCase()
+            .replace(/dorm/g, "")
+            .replace(/campus/g, "")
+            .replace(/[^a-z ]/g, "")
+            .replace(/\s+/g, "_")
+            .trim();
+
+          const campusKey = Object.values(CAMPUS_KEYS).find((key) =>
+            key.endsWith(cleanCampus)
+          );
+
+          if (!campusKey) {
+            return ctx.reply(
+              "⚠️ Invalid campus.\nAvailable campus keys:\n\n" +
                 Object.values(CAMPUS_KEYS).join("\n")
             );
           }
 
           const secretCode = generateSecretCode();
+
           const { error } = await supabase.from("riders").insert([
             {
               name,
@@ -165,11 +163,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
               telegram_id: null,
             },
           ]);
+
           if (error) return ctx.reply("❌ Failed to add rider.");
 
           await ctx.reply(
-            `✅ Rider "${name}" added!\nSecret code: ${secretCode}\nSend this code to the rider to activate: /activate ${secretCode}`
+            `✅ Rider "${name}" added successfully!\nCampus: ${campusKey}\nSecret code: ${secretCode}\nSend this to rider: /activate ${secretCode}`
           );
+
           adminStates.delete(adminId);
           break;
         }
