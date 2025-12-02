@@ -796,7 +796,6 @@ export function handleUserFlow(
           );
         }
 
-        // Calculate total quantity of foods in this order
         const totalFoodQuantity = state.foods.reduce(
           (acc, f) => acc + f.quantity,
           0
@@ -812,7 +811,6 @@ export function handleUserFlow(
           );
         }
 
-        // Deduct total food quantity from remaining_orders
         const newRemaining = contract.remaining_orders - totalFoodQuantity;
 
         await supabase
@@ -862,20 +860,20 @@ export function handleUserFlow(
 
       console.log("Order ID:", orderId);
 
-      const campusNormalized = state.campus
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim();
+      const campusNormalized = state.campus.toLowerCase().trim();
 
       const { data: riders } = await supabase
         .from("riders")
         .select("telegram_id, campus")
         .eq("active", true);
 
+      const clean = (s: string) =>
+        s
+          .toLowerCase()
+          .replace(/[\s_]+/g, "")
+          .trim();
       const campusRiders = riders?.filter(
-        (r) =>
-          r.campus.toLowerCase().replace(/\s+/g, " ").trim() ===
-          campusNormalized
+        (r) => clean(r.campus ?? "") === clean(state.campus ?? "")
       );
 
       if (campusRiders?.length) {
