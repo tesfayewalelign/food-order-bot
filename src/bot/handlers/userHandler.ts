@@ -756,7 +756,9 @@ export function handleUserFlow(
     if (!state) {
       return ctx.answerCbQuery(
         "⚠️ Session expired. Please restart with /start.",
-        { show_alert: true }
+        {
+          show_alert: true,
+        }
       );
     }
 
@@ -769,71 +771,61 @@ export function handleUserFlow(
       (acc, f) => acc + f.price * f.quantity,
       0
     );
+
     const totalPrice = subtotal + deliveryFee;
+
+    const totalFoodQuantity = state.foods.reduce(
+      (acc, f) => acc + f.quantity,
+      0
+    );
 
     const foodsList = state.foods
       .map((f) => `\`${f.name} x${f.quantity} = ${f.price * f.quantity} ETB\``)
       .join("\n");
-    const deliveryFeeText =
-      state.deliveryType === "new"
-        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
-        : 0;
 
-    await ctx.editMessageText(
-      `🧾 *Order Summary*\n\n🍔 Items:\n${foodsList}\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFeeText} ETB\n💵 Total: ${totalPrice} ETB`,
-      { parse_mode: "Markdown" }
-    );
+    let newRemainingOrders: number | null = null;
 
     try {
-      let newRemaining: number | undefined;
       if (state.deliveryType === "contract") {
         const contract = await getUserContract(userId);
 
         if (!contract) {
-          return ctx.answerCbQuery(
-            "⚠️ You don’t have an active contract. Please request a contract or pay per order.",
-            { show_alert: true }
-          );
+          return ctx.answerCbQuery("⚠️ No active contract found.", {
+            show_alert: true,
+          });
         }
-
-        const totalFoodQuantity = state.foods.reduce(
-          (acc, f) => acc + f.quantity,
-          0
-        );
 
         if (
           !contract.is_active ||
           contract.remaining_orders < totalFoodQuantity
         ) {
-          return ctx.answerCbQuery(
-            "⚠️ You do not have enough remaining contract orders. Contact admin to top-up.",
-            { show_alert: true }
-          );
+          return ctx.answerCbQuery("⚠️ Not enough remaining contract orders.", {
+            show_alert: true,
+          });
         }
 
-        const newRemaining = contract.remaining_orders - totalFoodQuantity;
+        newRemainingOrders = contract.remaining_orders - totalFoodQuantity;
 
         await supabase
           .from("contracts")
-          .update({ remaining_orders: newRemaining })
+          .update({ remaining_orders: newRemainingOrders })
           .eq("id", contract.id);
 
-        if (newRemaining === 0) {
+        if (newRemainingOrders === 0) {
           for (const adminId of ADMIN_IDS) {
             await ctx.telegram.sendMessage(
               adminId,
-              `⚠️ Contract for @${state.username || ""} (${
-                state.name
-              }) has reached 0 remaining orders. Reactivation needed.`
+              `⚠️ Contract for ${state.name} reached 0 remaining orders.`
             );
           }
         }
       }
 
       if (!state.campus) {
-        return ctx.reply("⚠️ Campus not selected yet.");
+        return ctx.reply("⚠️ Campus not selected.");
       }
-      const { data: insertedOrder, error: insertError } = await supabase
+
+      const { data: orderData, error: insertError } = await supabase
         .from("orders")
         .insert([
           {
@@ -842,6 +834,8 @@ export function handleUserFlow(
             campus: state.campus,
             restaurant: state.restaurant,
             foods: foodsList,
+            subtotal,
+            delivery_fee: deliveryFee,
             total: totalPrice,
             delivery_type: state.deliveryType,
             telegram_id: userId,
@@ -851,16 +845,11 @@ export function handleUserFlow(
         .select("id")
         .single();
 
-      if (insertError || !insertedOrder) {
-        console.error("Insert error:", insertError);
+      if (insertError || !orderData) {
         return ctx.reply("❌ Order could not be saved.");
       }
 
-      const orderId = insertedOrder.id;
-
-      console.log("Order ID:", orderId);
-
-      const campusNormalized = state.campus.toLowerCase().trim();
+      const orderId = orderData.id;
 
       const { data: riders } = await supabase
         .from("riders")
@@ -870,18 +859,22 @@ export function handleUserFlow(
       const campusRiders = riders?.filter((r) => r.campus === state.campus);
 
       if (campusRiders?.length) {
-        for (const r of campusRiders) {
-          if (r.telegram_id) {
+        for (const rider of campusRiders) {
+          if (rider.telegram_id) {
             await ctx.telegram.sendMessage(
-              r.telegram_id,
-              `🆕 *New Order*\nID: ${userId}\n🍔 ${state.restaurant}\n👤 ${
-                state.name
-              }\n🏫 ${state.campus}\n📞[${state.phone}](tel:${
-                state.phone
-              })\n💰 Total: ${totalPrice} ETB\n📝 Foods: ${foodsList}\n🍴 Meal Type: ${
-                state.mealType || "N/A"
-              }\n🔢 Remaining Contract Orders: ${newRemaining ?? "N/A"}`,
-
+              rider.telegram_id,
+              `🆕 *New Order*\n` +
+                `🆔 Order ID: ${orderId}\n` +
+                `🍽 Restaurant: ${state.restaurant}\n` +
+                `👤 Customer: ${state.name}\n` +
+                `🏫 Campus: ${state.campus}\n` +
+                `📞 [${state.phone}](tel:${state.phone})\n\n` +
+                `🍔 *Foods:*\n${foodsList}\n\n` +
+                `💰 *Subtotal:* ${subtotal} ETB\n` +
+                `🚚 *Delivery Fee:* ${deliveryFee} ETB\n` +
+                `💵 *Total:* ${totalPrice} ETB\n\n` +
+                `🍴 Meal Type: ${state.mealType || "N/A"}\n` +
+                `🔢 Remaining Contract Orders: ${newRemainingOrders ?? "N/A"}`,
               {
                 parse_mode: "Markdown",
                 reply_markup: {
@@ -905,17 +898,30 @@ export function handleUserFlow(
           }
         }
       }
-      resetUserState(userId);
+
       await ctx.editMessageText(
-        "✅ Order placed successfully! The restaurant is preparing your food. You will be notified when a rider picks it up."
+        `🎉 *Your Order is Confirmed!*\n\n` +
+          `👤 ${state.name}\n` +
+          `📞 ${state.phone}\n` +
+          `🏫 ${state.campus}\n` +
+          `🍽 ${state.restaurant}\n\n` +
+          `🍔 *Items:*\n${foodsList}\n\n` +
+          `💰 Subtotal: ${subtotal} ETB\n` +
+          `🚚 Delivery Fee: ${deliveryFee} ETB\n` +
+          `💵 *Total:* ${totalPrice} ETB\n\n` +
+          (state.deliveryType === "contract"
+            ? `🔢 New Remaining Contract Orders: ${newRemainingOrders}`
+            : ""),
+        { parse_mode: "Markdown" }
       );
+
+      resetUserState(userId);
       return ctx.answerCbQuery();
     } catch (err) {
       console.error("Confirm order error:", err);
-      return ctx.answerCbQuery(
-        "❌ Order failed due to a database error. Please try again.",
-        { show_alert: true }
-      );
+      return ctx.answerCbQuery("❌ Order failed due to server error.", {
+        show_alert: true,
+      });
     }
   });
 
