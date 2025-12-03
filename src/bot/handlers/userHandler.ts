@@ -899,7 +899,7 @@ export function handleUserFlow(
         }
       }
 
-      await ctx.editMessageText(
+      await ctx.reply(
         `🎉 *Your Order is Confirmed!*\n\n` +
           `👤 ${state.name}\n` +
           `📞 ${state.phone}\n` +
