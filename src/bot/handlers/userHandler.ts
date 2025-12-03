@@ -703,11 +703,6 @@ export function handleUserFlow(
         ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
         : 0;
 
-    await ctx.editMessageText(
-      `🧾 *Order Summary*\n\n🍔 Items:\n${foodsList}\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFeeText} ETB\n💵 Total: ${totalPrice} ETB`,
-      { parse_mode: "Markdown" }
-    );
-
     let contractInfo = "";
     if (deliveryType === "contract") {
       const contract = await getUserContract(userId);
