@@ -670,103 +670,98 @@ export function handleUserFlow(
     if (!text) return "";
     return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
   }
+  bot.action(/^delivery_(.+)/, async (ctx) => {
+    const data = getCallbackData(ctx);
+    if (!data) return ctx.answerCbQuery();
+
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+
+    if (!state) {
+      return ctx.answerCbQuery(
+        "⚠️ Session expired. Please restart with /start.",
+        {
+          show_alert: true,
+        }
+      );
+    }
+
+    const deliveryType = data.replace("delivery_", "") as "new" | "contract";
+    state.deliveryType = deliveryType;
+    state.step = "confirm_order";
+
+    // Calculate prices
+    const deliveryFee =
+      deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
+    const subtotal = state.foods.reduce(
+      (acc, f) => acc + f.price * f.quantity,
+      0
+    );
+
+    const totalPrice = subtotal + deliveryFee;
+
+    const foodsList = state.foods
+      .map((f) => `• ${f.name} x${f.quantity} = *${f.price * f.quantity} ETB*`)
+      .join("\n");
+
+    // Get contract details if needed
+    let contractInfo = "";
+    if (deliveryType === "contract") {
+      const contract = await getUserContract(userId);
+      contractInfo = contract
+        ? `📦 Remaining Contract Orders: *${contract.remaining_orders}*`
+        : "⚠️ Contract status unknown.";
+    }
+
+    // Auto-fill missing profile info
+    if (!state.name || !state.phone) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("name, phone")
+        .eq("telegram_id", userId)
+        .maybeSingle();
+
+      if (profile) {
+        state.name = profile.name;
+        state.phone = profile.phone;
+      }
+    }
+
+    // FINAL SINGLE MESSAGE
+    await ctx.editMessageText(
+      `🧾 *Order Summary*\n\n` +
+        `👤 *Name:* ${state.name || "N/A"}\n` +
+        `📞 *Phone:* ${state.phone || "N/A"}\n` +
+        `🏫 *Campus:* ${state.campus || "N/A"}\n` +
+        `🍽 *Restaurant:* ${state.restaurant || "N/A"}\n` +
+        `🍴 *Meal Type:* ${state.mealType || "N/A"}\n\n` +
+        `🍔 *Items:*\n${foodsList}\n\n` +
+        `💰 *Subtotal:* ${subtotal} ETB\n` +
+        `🚚 *Delivery Fee:* ${deliveryFee} ETB\n` +
+        `💵 *Total:* ${totalPrice} ETB\n\n` +
+        `${contractInfo}`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback("✅ Confirm", "confirm_order"),
+            Markup.button.callback("❌ Cancel", "cancel_order"),
+          ],
+        ]),
+      }
+    );
+
+    return ctx.answerCbQuery();
+  });
 
   bot.action("confirm_order", async (ctx) => {
     const userId = ctx.from!.id;
     const state = userState.get(userId);
 
     if (!state) {
-      bot.action(/^delivery_(.+)/, async (ctx) => {
-        const data = getCallbackData(ctx);
-        if (!data) return ctx.answerCbQuery();
-
-        const userId = ctx.from!.id;
-        const state = userState.get(userId);
-
-        if (!state) {
-          return ctx.answerCbQuery(
-            "⚠️ Session expired. Please restart with /start.",
-            {
-              show_alert: true,
-            }
-          );
-        }
-
-        const deliveryType = data.replace("delivery_", "") as
-          | "new"
-          | "contract";
-        state.deliveryType = deliveryType;
-        state.step = "confirm_order";
-
-        // Calculate prices
-        const deliveryFee =
-          deliveryType === "new"
-            ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
-            : 0;
-
-        const subtotal = state.foods.reduce(
-          (acc, f) => acc + f.price * f.quantity,
-          0
-        );
-
-        const totalPrice = subtotal + deliveryFee;
-
-        const foodsList = state.foods
-          .map(
-            (f) => `• ${f.name} x${f.quantity} = *${f.price * f.quantity} ETB*`
-          )
-          .join("\n");
-
-        // Get contract details if needed
-        let contractInfo = "";
-        if (deliveryType === "contract") {
-          const contract = await getUserContract(userId);
-          contractInfo = contract
-            ? `📦 Remaining Contract Orders: *${contract.remaining_orders}*`
-            : "⚠️ Contract status unknown.";
-        }
-
-        // Auto-fill missing profile info
-        if (!state.name || !state.phone) {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("name, phone")
-            .eq("telegram_id", userId)
-            .maybeSingle();
-
-          if (profile) {
-            state.name = profile.name;
-            state.phone = profile.phone;
-          }
-        }
-
-        // FINAL SINGLE MESSAGE
-        await ctx.editMessageText(
-          `🧾 *Order Summary*\n\n` +
-            `👤 *Name:* ${state.name || "N/A"}\n` +
-            `📞 *Phone:* ${state.phone || "N/A"}\n` +
-            `🏫 *Campus:* ${state.campus || "N/A"}\n` +
-            `🍽 *Restaurant:* ${state.restaurant || "N/A"}\n` +
-            `🍴 *Meal Type:* ${state.mealType || "N/A"}\n\n` +
-            `🍔 *Items:*\n${foodsList}\n\n` +
-            `💰 *Subtotal:* ${subtotal} ETB\n` +
-            `🚚 *Delivery Fee:* ${deliveryFee} ETB\n` +
-            `💵 *Total:* ${totalPrice} ETB\n\n` +
-            `${contractInfo}`,
-          {
-            parse_mode: "Markdown",
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback("✅ Confirm", "confirm_order"),
-                Markup.button.callback("❌ Cancel", "cancel_order"),
-              ],
-            ]),
-          }
-        );
-
-        return ctx.answerCbQuery();
-      });
-
       return ctx.answerCbQuery(
         "⚠️ Session expired. Please restart with /start.",
         { show_alert: true }
