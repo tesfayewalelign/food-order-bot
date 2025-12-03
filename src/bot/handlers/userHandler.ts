@@ -680,7 +680,9 @@ export function handleUserFlow(
     if (!state)
       return ctx.answerCbQuery(
         "⚠️ Session expired. Please restart with /start.",
-        { show_alert: true }
+        {
+          show_alert: true,
+        }
       );
 
     const deliveryType = data.replace("delivery_", "") as "new" | "contract";
@@ -701,6 +703,15 @@ export function handleUserFlow(
     const foodsList = state.foods
       .map((f) => `\`${f.name} x${f.quantity} = ${f.price * f.quantity} ETB\``)
       .join("\n");
+    const deliveryFeeText =
+      state.deliveryType === "new"
+        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
+        : 0;
+
+    await ctx.editMessageText(
+      `🧾 *Order Summary*\n\n🍔 Items:\n${foodsList}\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFeeText} ETB\n💵 Total: ${totalPrice} ETB`,
+      { parse_mode: "Markdown" }
+    );
 
     let contractInfo = "";
     if (deliveryType === "contract") {
@@ -709,7 +720,6 @@ export function handleUserFlow(
         ? `📦 Remaining Contract Orders: ${contract.remaining_orders}`
         : "⚠️ Contract status unknown.";
     }
-
     if (!state.name || !state.phone) {
       const { data: profile } = await supabase
         .from("profiles")
@@ -718,18 +728,18 @@ export function handleUserFlow(
         .maybeSingle();
 
       if (profile) {
-        state.name = profile.name ?? "";
-        state.phone = profile.phone ?? "";
+        state.name = profile.name;
+        state.phone = profile.phone;
       }
     }
 
     await ctx.editMessageText(
-      `🧾 *Order Summary*\n\n👤 ${state.name ?? "N/A"}\n📞 ${
-        state.phone ?? "N/A"
-      }\n🏫 ${state.campus ?? "N/A"}\n🍽 ${
-        state.restaurant ?? "N/A"
+      `🧾 *Order Summary*\n\n👤 ${state.name || "N/A"}\n📞 ${
+        state.phone || "N/A"
+      }\n🏫 ${state.campus || "N/A"}\n🍽 ${
+        state.restaurant || "N/A"
       }\n🍴 Meal Type: ${
-        state.mealType ?? "N/A"
+        state.mealType || "N/A"
       }\n\n🍔 *Items:*\n${foodsList}\n\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFee} ETB\n💵 Total: ${totalPrice} ETB\n\n${contractInfo}`,
       {
         parse_mode: "Markdown",
@@ -741,7 +751,6 @@ export function handleUserFlow(
         ]),
       }
     );
-
     return ctx.answerCbQuery();
   });
 
@@ -767,63 +776,52 @@ export function handleUserFlow(
     );
     const totalPrice = subtotal + deliveryFee;
 
-    const totalFoodQuantity = state.foods.reduce(
-      (acc, f) => acc + f.quantity,
-      0
-    );
-
     const foodsList = state.foods
       .map((f) => `\`${f.name} x${f.quantity} = ${f.price * f.quantity} ETB\``)
       .join("\n");
 
-    let newRemainingOrders: number | null = null;
+    let updatedRemainingOrders: number | null = null;
 
     try {
+      // ⚡ CONTRACT LOGIC
       if (state.deliveryType === "contract") {
         const contract = await getUserContract(userId);
 
         if (!contract) {
-          return ctx.answerCbQuery("⚠️ No active contract found.", {
+          return ctx.answerCbQuery(
+            "⚠️ No active contract. Please request contract or choose delivery.",
+            { show_alert: true }
+          );
+        }
+
+        const totalFoodQty = state.foods.reduce(
+          (acc, f) => acc + f.quantity,
+          0
+        );
+
+        if (!contract.is_active || contract.remaining_orders < totalFoodQty) {
+          return ctx.answerCbQuery("⚠️ Not enough contract orders remaining.", {
             show_alert: true,
           });
         }
 
-        if (
-          !contract.is_active ||
-          contract.remaining_orders < totalFoodQuantity
-        ) {
-          return ctx.answerCbQuery("⚠️ Not enough remaining contract orders.", {
-            show_alert: true,
-          });
-        }
-
-        newRemainingOrders = contract.remaining_orders - totalFoodQuantity;
+        updatedRemainingOrders = contract.remaining_orders - totalFoodQty;
 
         await supabase
           .from("contracts")
-          .update({ remaining_orders: newRemainingOrders })
+          .update({ remaining_orders: updatedRemainingOrders })
           .eq("id", contract.id);
-
-        if (newRemainingOrders === 0) {
-          for (const adminId of ADMIN_IDS) {
-            await ctx.telegram.sendMessage(
-              adminId,
-              `⚠️ Contract for ${state.name ?? ""} reached 0 remaining orders.`
-            );
-          }
-        }
       }
 
-      if (!state.campus) return ctx.reply("⚠️ Campus not selected.");
-
-      const { data: orderData, error: insertError } = await supabase
+      // ⚡ Save order in database
+      const { data: insertedOrder, error: insertError } = await supabase
         .from("orders")
         .insert([
           {
-            user_name: state.name ?? "",
-            phone: state.phone ?? "",
-            campus: state.campus ?? "",
-            restaurant: state.restaurant ?? "",
+            user_name: state.name,
+            phone: state.phone,
+            campus: state.campus,
+            restaurant: state.restaurant,
             foods: foodsList,
             subtotal,
             delivery_fee: deliveryFee,
@@ -836,11 +834,27 @@ export function handleUserFlow(
         .select("id")
         .single();
 
-      if (insertError || !orderData)
-        return ctx.reply("❌ Order could not be saved.");
+      if (insertError || !insertedOrder) {
+        return ctx.reply("❌ Order failed to save.");
+      }
 
-      const orderId = orderData.id;
+      const orderId = insertedOrder.id;
 
+      // ⚡ BEFORE sending to rider → show final summary to user
+      await ctx.editMessageText(
+        `🎉 *Order Placed!*\n\n` +
+          `👤 ${state.name}\n📞 ${state.phone}\n🏫 ${state.campus}\n🍽 ${state.restaurant}\n🍴 ${state.mealType}\n\n` +
+          `🍔 *Items:*\n${foodsList}\n\n` +
+          `💰 Subtotal: *${subtotal} ETB*\n` +
+          `🚚 Delivery Fee: *${deliveryFee} ETB*\n` +
+          `💵 Total: *${totalPrice} ETB*\n\n` +
+          (updatedRemainingOrders !== null
+            ? `📦 Remaining Contract Orders: *${updatedRemainingOrders}*`
+            : ""),
+        { parse_mode: "Markdown" }
+      );
+
+      // ⚡ Notify riders
       const { data: riders } = await supabase
         .from("riders")
         .select("telegram_id, campus")
@@ -849,67 +863,47 @@ export function handleUserFlow(
       const campusRiders = riders?.filter((r) => r.campus === state.campus);
 
       if (campusRiders?.length) {
-        for (const rider of campusRiders) {
-          if (rider.telegram_id) {
-            await ctx.telegram.sendMessage(
-              rider.telegram_id,
-              `🆕 *New Order*\n` +
-                `🆔 Order ID: ${orderId}\n` +
-                `🍽 Restaurant: ${state.restaurant ?? ""}\n` +
-                `👤 Customer: ${state.name ?? ""}\n` +
-                `🏫 Campus: ${state.campus ?? ""}\n` +
-                `📞 [${state.phone ?? ""}](tel:${state.phone ?? ""})\n\n` +
-                `🍔 *Foods:*\n${foodsList}\n\n` +
-                `💰 *Subtotal:* ${subtotal} ETB\n` +
-                `🚚 *Delivery Fee:* ${deliveryFee} ETB\n` +
-                `💵 *Total:* ${totalPrice} ETB\n\n` +
-                `🍴 Meal Type: ${state.mealType ?? "N/A"}\n` +
-                `🔢 Remaining Contract Orders: ${newRemainingOrders ?? "N/A"}`,
-              {
-                parse_mode: "Markdown",
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      {
-                        text: "✅ Approve",
-                        callback_data: `rider_order_approve_${orderId}`,
-                      },
-                    ],
-                    [
-                      {
-                        text: "❌ Reject",
-                        callback_data: `rider_order_reject_${orderId}`,
-                      },
-                    ],
+        for (const r of campusRiders) {
+          await ctx.telegram.sendMessage(
+            r.telegram_id,
+            `🆕 *New Order*\n` +
+              `🆔 Order ID: ${orderId}\n\n` +
+              `👤 ${state.name}\n📞 ${state.phone}\n🏫 ${state.campus}\n🍽 ${state.restaurant}\n🍴 ${state.mealType}\n\n` +
+              `🍔 *Items:*\n${foodsList}\n\n` +
+              `💰 Food Price: *${subtotal} ETB*\n` +
+              `🚚 Delivery Fee: *${deliveryFee} ETB*\n` +
+              `💵 Total: *${totalPrice} ETB*\n\n` +
+              (updatedRemainingOrders !== null
+                ? `📦 Remaining Contract Orders: *${updatedRemainingOrders}*`
+                : ""),
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "✅ Approve",
+                      callback_data: `rider_order_approve_${orderId}`,
+                    },
                   ],
-                },
-              }
-            );
-          }
+                  [
+                    {
+                      text: "❌ Reject",
+                      callback_data: `rider_order_reject_${orderId}`,
+                    },
+                  ],
+                ],
+              },
+            }
+          );
         }
       }
-
-      await ctx.reply(
-        `🎉 *Your Order is Confirmed!*\n\n` +
-          `👤 ${state.name ?? ""}\n` +
-          `📞 ${state.phone ?? ""}\n` +
-          `🏫 ${state.campus ?? ""}\n` +
-          `🍽 ${state.restaurant ?? ""}\n\n` +
-          `🍔 *Items:*\n${foodsList}\n\n` +
-          `💰 Subtotal: ${subtotal} ETB\n` +
-          `🚚 Delivery Fee: ${deliveryFee} ETB\n` +
-          `💵 *Total:* ${totalPrice} ETB\n\n` +
-          (state.deliveryType === "contract"
-            ? `🔢 New Remaining Contract Orders: ${newRemainingOrders}`
-            : ""),
-        { parse_mode: "Markdown" }
-      );
 
       resetUserState(userId);
       return ctx.answerCbQuery();
     } catch (err) {
       console.error("Confirm order error:", err);
-      return ctx.answerCbQuery("❌ Order failed due to server error.", {
+      return ctx.answerCbQuery("❌ Error processing order.", {
         show_alert: true,
       });
     }
