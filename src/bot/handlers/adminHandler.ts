@@ -391,6 +391,58 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await ctx.reply(`🗑 Rider deleted: ${id}`);
   });
 
+  bot.action(/admin_rider_view_(.+)/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+
+    const { data: rider, error } = await supabase
+      .from("riders")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Supabase Error fetching rider details:", error);
+      return ctx.reply("❌ Error fetching rider details.");
+    }
+
+    if (!rider) {
+      return ctx.reply("⚠️ Rider not found.");
+    }
+
+    const status = rider.active ? "🟢 Active" : "🔴 Inactive";
+    const riderDetails = `
+**👤 Rider Details: ${rider.name}**
+
+* **ID:** ${rider.id}
+* **Full Name:** ${rider.name}
+* **Phone:** ${rider.phone}
+* **Campus:** ${rider.campus}
+* **Status:** ${status}
+`;
+
+    const keyboard = [
+      [
+        Markup.button.callback(
+          rider.active ? "Toggle Inactive 🔴" : "Toggle Active 🟢",
+          `admin_rider_toggle_${rider.id}`
+        ),
+      ],
+      [
+        Markup.button.callback(
+          "🗑 Delete Rider",
+          `admin_rider_delete_${rider.id}`
+        ),
+      ],
+      [Markup.button.callback("🔙 Back to Riders List", "admin_riders")],
+    ];
+
+    await ctx.editMessageText(riderDetails, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard(keyboard),
+    });
+  });
+
   bot.action("admin_orders", async (ctx) => {
     await ctx.answerCbQuery();
     const { data: orders } = await supabase
