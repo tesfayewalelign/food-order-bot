@@ -391,6 +391,29 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await ctx.reply(`🗑 Rider deleted: ${id}`);
   });
 
+  function escapeMarkdown(text: string): string {
+    if (typeof text !== "string") return String(text);
+
+    return text
+      .replace(/_/g, "\\_")
+      .replace(/\*/g, "\\*")
+      .replace(/\[/g, "\\[")
+      .replace(/\]/g, "\\]")
+      .replace(/\(/g, "\\(")
+      .replace(/\)/g, "\\)")
+      .replace(/~/g, "\\~")
+      .replace(/`/g, "\\`")
+      .replace(/>/g, "\\>")
+      .replace(/#/g, "\\#")
+      .replace(/\+/g, "\\+")
+      .replace(/-/g, "\\-")
+      .replace(/=/g, "\\=")
+      .replace(/\|/g, "\\|")
+      .replace(/{/g, "\\{")
+      .replace(/}/g, "\\}")
+      .replace(/\./g, "\\.")
+      .replace(/!/g, "\\!");
+  }
   bot.action(/admin_rider_view_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
     const id = ctx.match[1];
@@ -410,18 +433,29 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       return ctx.reply("⚠️ Rider not found.");
     }
 
+    const safeName = escapeMarkdown(rider.name || "N/A");
+    const safePhone = escapeMarkdown(rider.phone || "N/A");
+    const safeCampus = escapeMarkdown(rider.campus || "N/A");
+    const safeId = escapeMarkdown(String(rider.id));
+
     const status = rider.active ? "🟢 Active" : "🔴 Inactive";
     const riderDetails = `
-**👤 Rider Details: ${rider.name}**
+**👤 Rider Details: ${safeName}**
 
-* **ID:** ${rider.id}
-* **Full Name:** ${rider.name}
-* **Phone:** ${rider.phone}
-* **Campus:** ${rider.campus}
+* **ID:** ${safeId}
+* **Full Name:** ${safeName}
+* **Phone:** ${safePhone}
+* **Campus:** ${safeCampus}
 * **Status:** ${status}
 `;
 
     const keyboard = [
+      [
+        Markup.button.callback(
+          "✏️ Modify Rider",
+          `admin_rider_modify_${rider.id}`
+        ),
+      ],
       [
         Markup.button.callback(
           rider.active ? "Toggle Inactive 🔴" : "Toggle Active 🟢",
