@@ -29,7 +29,8 @@ export interface UserState {
     | "select_meal_type"
     | "ask_custom_price"
     | "custom_restaurant_name"
-    | "custom_food_name";
+    | "custom_food_name"
+    | "ask_payment_mode";
 
   foods: FoodItem[];
 
@@ -49,6 +50,7 @@ export interface UserState {
   restaurantId?: string;
   mealType?: string;
   isRider?: boolean;
+  paymentMode?: "normal" | "restaurant_contract";
 }
 
 export const userState = new Map<number, UserState>();
