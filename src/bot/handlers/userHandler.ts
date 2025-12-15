@@ -309,18 +309,8 @@ export function handleUserFlow(
     state.step = "ask_payment_mode";
 
     const keyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          "❌ No Contract (Pay Food + Delivery)",
-          "payment_normal"
-        ),
-      ],
-      [
-        Markup.button.callback(
-          "📄 I Have Food Contract (Pay Delivery Only)",
-          "payment_contract"
-        ),
-      ],
+      [Markup.button.callback(" No Contract (Pay Food)", "payment_normal")],
+      [Markup.button.callback("Contract (Pre Paid)", "payment_contract")],
       [Markup.button.callback("🔙 Back", "back_to_restaurants")],
     ]);
 
@@ -430,7 +420,7 @@ export function handleUserFlow(
       return ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
 
     state.step = "custom_restaurant_name";
-    state.restaurant = undefined; // Reset
+    state.restaurant = undefined;
 
     await ctx.reply("✏️ Type the name of your restaurant or café:", {
       reply_markup: Markup.inlineKeyboard([
