@@ -468,6 +468,7 @@ export function handleUserFlow(
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🥗 Lunch", `meal_lunch`)],
       [Markup.button.callback("🌙 Dinner", `meal_dinner`)],
+      [Markup.button.callback("⭐ Special Order (Any Time)", "meal_special")],
       [Markup.button.callback("🔙 Back", "back_to_restaurants")],
     ]);
 
@@ -715,6 +716,21 @@ export function handleUserFlow(
     if (!text) return "";
     return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
   }
+  function calculateDeliveryFee(
+    foods: { quantity: number }[],
+    mealType?: string,
+    deliveryType?: "new" | "contract"
+  ) {
+    if (deliveryType === "contract") return 0;
+
+    const totalItems = foods.reduce((acc, f) => acc + f.quantity, 0);
+
+    if (mealType === "special") {
+      return totalItems >= 2 ? 50 : 30;
+    }
+
+    return totalItems * 10;
+  }
 
   bot.action(/^delivery_(.+)/, async (ctx) => {
     if (!("data" in ctx.callbackQuery) || !ctx.callbackQuery.data) {
@@ -736,10 +752,12 @@ export function handleUserFlow(
     state.deliveryType = deliveryType;
     state.step = "confirm_order";
 
-    const deliveryFee =
-      deliveryType === "new"
-        ? state.foods.reduce((acc, f) => acc + f.quantity * 10, 0)
-        : 0;
+    const deliveryFee = calculateDeliveryFee(
+      state.foods,
+      state.mealType,
+      state.deliveryType
+    );
+
     const subtotal =
       state.paymentMode === "restaurant_contract"
         ? 0
@@ -778,15 +796,22 @@ export function handleUserFlow(
     }
 
     await ctx.editMessageText(
-      `🧾 *Order Summary*\n\n👤 ${escapeMarkdown(
-        state.name || "N/A"
-      )}\n📞 ${escapeMarkdown(state.phone || "N/A")}\n🏫 ${escapeMarkdown(
-        state.campus || "N/A"
-      )}\n🍽 ${escapeMarkdown(
-        state.restaurant || "N/A"
-      )}\n🍴 Meal Type: ${escapeMarkdown(
-        state.mealType || "N/A"
-      )}\n\n🍔 *Items:*\n${foodsList}\n\n💰 Subtotal: ${subtotal} ETB\n🚚 Delivery Fee: ${deliveryFee} ETB\n💵 Total: ${totalPrice} ETB\n\n${contractInfo}`,
+      `🧾 *Order Summary*\n\n` +
+        `👤 ${escapeMarkdown(state.name || "N/A")}\n` +
+        `📞 ${escapeMarkdown(state.phone || "N/A")}\n` +
+        `🏫 ${escapeMarkdown(state.campus || "N/A")}\n` +
+        `🍽 ${escapeMarkdown(state.restaurant || "N/A")}\n` +
+        `🍴 Meal Type: ${escapeMarkdown(state.mealType || "N/A")}\n\n` +
+        `🍔 *Items:*\n${foodsList}\n\n` +
+        `💰 Subtotal: ${subtotal} ETB\n` +
+        `🚚 Delivery Fee: ${deliveryFee} ETB\n` +
+        `💵 Total: ${totalPrice} ETB\n\n` +
+        `${contractInfo}` +
+        `${
+          state.mealType === "special"
+            ? "\n⚡ Special Order Delivery Applied"
+            : ""
+        }`,
       {
         parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
@@ -921,9 +946,15 @@ export function handleUserFlow(
               })\n\n` +
               `${riderPaymentNote}\n\n` +
               `📝 *Foods:*\n${foodsList}\n\n` +
+              `💰 Subtotal: ${subtotal} ETB\n` +
               `🚚 Delivery Fee: ${deliveryFee} ETB\n` +
               `💵 Total to Collect: ${totalPrice} ETB\n` +
               `🍴 Meal Type: ${escapeMarkdown(state.mealType || "N/A")}\n` +
+              `${
+                state.mealType === "special"
+                  ? "⚡ Special Order Delivery Applied\n"
+                  : ""
+              }` +
               `${
                 state.paymentMode === "restaurant_contract"
                   ? `🔢 Remaining Contract Orders: ${newRemaining ?? "N/A"}`
@@ -966,6 +997,11 @@ export function handleUserFlow(
           `🍔 *Items:*\n${foodsList}\n\n` +
           `💰 Subtotal: ${subtotal} ETB\n` +
           `🚚 Delivery Fee: ${deliveryFee} ETB\n` +
+          `${
+            state.mealType === "special"
+              ? "⚡ Special Order Delivery Applied\n"
+              : ""
+          }` +
           `💵 *Total to Pay: ${totalPrice} ETB*\n` +
           `${
             state.paymentMode === "restaurant_contract"
