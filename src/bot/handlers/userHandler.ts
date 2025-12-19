@@ -173,7 +173,6 @@ export function handleUserFlow(
             return ctx.reply("🍔 Choose your campus:", campusKeyboard);
 
           case "📦 My Orders": {
-            // ⏰ last 30 days
             const oneMonthAgo = new Date();
             oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
 
@@ -804,12 +803,21 @@ export function handleUserFlow(
         state.phone = profile.phone || "";
       }
     }
+    function formatCampus(campus?: string) {
+      if (!campus) return "N/A";
+
+      return campus
+        .replace(/^campus_/, "")
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ");
+    }
 
     await ctx.editMessageText(
       `🧾 *Order Summary*\n\n` +
         `👤 ${escapeMarkdown(state.name || "N/A")}\n` +
         `📞 ${escapeMarkdown(state.phone || "N/A")}\n` +
-        `🏫 ${escapeMarkdown(state.campus || "N/A")}\n` +
+        `🏫 ${escapeMarkdown(formatCampus(state.campus))}` +
         `🍽 ${escapeMarkdown(state.restaurant || "N/A")}\n` +
         `🍴 Meal Type: ${escapeMarkdown(state.mealType || "N/A")}\n\n` +
         `🍔 *Items:*\n${foodsList}\n\n` +
