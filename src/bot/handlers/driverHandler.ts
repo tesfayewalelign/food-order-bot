@@ -41,7 +41,67 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
         "🛵 Welcome Rider!\nPlease activate your account with the code sent by admin:\n/activate <4-digit-code>"
       );
     }
+
+    bot.hears("📦 My Deliveries", handleMyDeliveries);
+    bot.hears("📅 Schedule", handleSchedule);
+    bot.hears("🏠 Main Menu", handleMainMenu);
   });
+  async function handleMyDeliveries(ctx: Context) {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("id, name")
+      .eq("telegram_id", telegramId)
+      .single();
+
+    if (!rider) {
+      return ctx.reply("⚠️ You are not activated.");
+    }
+
+    const since = new Date();
+    since.setHours(since.getHours() - 24);
+
+    const { data: orders } = await supabase
+      .from("orders")
+      .select("id, delivered_at")
+      .eq("rider_id", rider.id)
+      .eq("status", "delivered")
+      .gte("delivered_at", since.toISOString())
+      .order("delivered_at", { ascending: false });
+
+    if (!orders || orders.length === 0) {
+      return ctx.reply("📦 No deliveries in the last 24 hours.");
+    }
+
+    let message = `📦 *Your Deliveries (Last 24 Hours)*\n\n`;
+    orders.forEach((o, i) => {
+      message += `${i + 1}. Order #${o.id}\n`;
+    });
+
+    message += `\n✅ Total Delivered: *${orders.length}*`;
+
+    return ctx.reply(message, { parse_mode: "Markdown" });
+  }
+
+  async function handleSchedule(ctx: Context) {
+    return ctx.reply(
+      "📅 *Your Schedule*\n\n🕘 9:00 AM – 6:00 PM\n📍 Campus Area",
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  async function handleMainMenu(ctx: Context) {
+    return ctx.reply(
+      "🏠 Main Menu",
+      Markup.keyboard([
+        ["📦 My Deliveries"],
+        ["📅 Schedule"],
+        ["🏠 Main Menu"],
+      ]).resize()
+    );
+  }
 
   bot.command("activate", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;

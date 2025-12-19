@@ -172,24 +172,44 @@ export function handleUserFlow(
             state.step = "profile_ask_campus";
             return ctx.reply("🍔 Choose your campus:", campusKeyboard);
 
-          case "📦 My Orders":
-            const { data: orders } = await supabase
+          case "📦 My Orders": {
+            // ⏰ last 30 days
+            const oneMonthAgo = new Date();
+            oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+            const { data: orders, error } = await supabase
               .from("orders")
               .select("*")
               .eq("telegram_id", userId)
-              .order("id", { ascending: false });
+              .gte("created_at", oneMonthAgo.toISOString())
+              .order("created_at", { ascending: true })
+              .limit(60);
 
-            if (!orders || orders.length === 0)
-              return ctx.reply("📂 You have no orders yet.");
+            if (error) {
+              console.error(error);
+              return ctx.reply("⚠️ Failed to load your orders.");
+            }
+
+            if (!orders || orders.length === 0) {
+              return ctx.reply("📂 You have no orders in the last 30 days.");
+            }
 
             const ordersList = orders
               .map(
-                (o) =>
-                  `• 🆔 Order #${o.id}\n  🍽 ${o.restaurant}\n  💰 Total: ${o.total} ETB\n  📦 Status: ${o.status}`
+                (o, index) =>
+                  `*${index + 1}. 🆔 Order #${o.id}*\n` +
+                  `🍽 ${o.restaurant}\n` +
+                  `💰 Total: ${o.total} ETB\n` +
+                  `📦 Status: ${o.status}\n` +
+                  `🕒 ${new Date(o.created_at).toLocaleString()}`
               )
               .join("\n\n");
 
-            return ctx.reply(`📂 Your Orders:\n\n${ordersList}`);
+            return ctx.reply(
+              `📂 *Your Orders (Last 30 Days — max 40)*\n\n${ordersList}`,
+              { parse_mode: "Markdown" }
+            );
+          }
 
           case "ℹ️ Help":
             return ctx.reply(
