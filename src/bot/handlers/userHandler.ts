@@ -817,7 +817,7 @@ export function handleUserFlow(
       `🧾 *Order Summary*\n\n` +
         `👤 ${escapeMarkdown(state.name || "N/A")}\n` +
         `📞 ${escapeMarkdown(state.phone || "N/A")}\n` +
-        `🏫 ${escapeMarkdown(formatCampus(state.campus))}` +
+        `🏫 ${escapeMarkdown(formatCampus(state.campus))}\n` +
         `🍽 ${escapeMarkdown(state.restaurant || "N/A")}\n` +
         `🍴 Meal Type: ${escapeMarkdown(state.mealType || "N/A")}\n\n` +
         `🍔 *Items:*\n${foodsList}\n\n` +
