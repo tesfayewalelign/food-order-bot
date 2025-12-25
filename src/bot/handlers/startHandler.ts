@@ -10,6 +10,7 @@ import {
   getMainMenuKeyboard,
   campusKeyboard,
 } from "../../helpers/keyboards.js";
+import { riderMenuKeyboard } from "../../helpers/keyboards.js";
 
 function isContactMessage(
   msg: any
@@ -23,7 +24,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!userId) return;
 
     try {
-      // --- Admin check ---
       if (ADMIN_IDS.includes(userId)) {
         return ctx.reply(
           `👋 Welcome Admin ${ctx.from?.first_name}!`,
@@ -33,7 +33,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       resetUserState(userId);
 
-      // --- Rider check ---
       const { data: rider } = await supabase
         .from("riders")
         .select("*")
@@ -53,12 +52,9 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           deliveryType: undefined,
         });
 
-        return ctx.reply(
-          `👋 Welcome Rider ${rider.name}! You are active in campus: ${rider.campus}`
-        );
+        return ctx.reply(`🚴‍♂️ Welcome back ${rider.name}!`, riderMenuKeyboard);
       }
 
-      // --- Normal user check ---
       const { data: profile } = await supabase
         .from("profiles")
         .select("telegram_id, name, phone, campus")

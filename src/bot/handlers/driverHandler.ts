@@ -16,6 +16,12 @@ function isTextMessage(
   );
 }
 
+export const riderMenuKeyboard = Markup.keyboard([
+  ["📦 My Deliveries"],
+  ["📅 Schedule"],
+  ["🏠 Main Menu"],
+]).resize();
+
 export function setupDriverHandler(bot: Telegraf<Context>) {
   bot.start(async (ctx) => {
     const userId = ctx.from?.id;

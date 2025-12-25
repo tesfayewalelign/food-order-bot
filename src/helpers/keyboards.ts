@@ -16,6 +16,12 @@ export function getMainMenuKeyboard(isAdmin: boolean, isDriver: boolean) {
   ]).resize();
 }
 
+export const riderMenuKeyboard = Markup.keyboard([
+  ["📦 My Deliveries"],
+  ["📅 Schedule"],
+  ["🏠 Main Menu"],
+]).resize();
+
 export const campusKeyboard = Markup.inlineKeyboard([
   [
     Markup.button.callback(
