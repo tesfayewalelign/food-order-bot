@@ -134,6 +134,12 @@ export function handleUserFlow(
         const keyboard = Markup.inlineKeyboard([
           [Markup.button.callback("🥗 Lunch", "meal_lunch")],
           [Markup.button.callback("🌙 Dinner", "meal_dinner")],
+          [
+            Markup.button.callback(
+              "⭐ Special Order (Any Time)",
+              "meal_special"
+            ),
+          ],
           [Markup.button.callback("🔙 Back", "back_to_restaurants")],
         ]);
 
@@ -350,6 +356,7 @@ export function handleUserFlow(
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🥗 Lunch", "meal_lunch")],
       [Markup.button.callback("🌙 Dinner", "meal_dinner")],
+      [Markup.button.callback("⭐ Special Order (Any Time)", "meal_special")],
       [Markup.button.callback("🔙 Back", "back_to_restaurants")],
     ]);
 
@@ -371,6 +378,7 @@ export function handleUserFlow(
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🥗 Lunch", "meal_lunch")],
       [Markup.button.callback("🌙 Dinner", "meal_dinner")],
+      [Markup.button.callback("⭐ Special Order (Any Time)", "meal_special")],
       [Markup.button.callback("🔙 Back", "back_to_restaurants")],
     ]);
 
