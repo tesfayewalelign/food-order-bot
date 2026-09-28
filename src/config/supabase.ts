@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import dns from "dns";
+
+dns.setDefaultResultOrder("ipv4first");
 
 dotenv.config();
 

@@ -1,5 +1,5 @@
 import { Telegraf, Context, Markup } from "telegraf";
-import { supabase } from "../../config/supabase.js";
+import { db } from "../../config/db.js";
 
 type AdminStateAction =
   | "add_restaurant"
@@ -23,24 +23,6 @@ function generateSecretCode(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-function isTextMessage(
-  ctx: Context
-): ctx is Context & { message: { text: string } } {
-  return !!ctx.message && typeof (ctx.message as any).text === "string";
-}
-
-export const CAMPUS_KEYS = {
-  MAIN_BOYS_WHITES_HOUSE: "campus_main_boys_whites_house",
-  MAIN_BOYS_AFRICA: "campus_main_boys_africa",
-  MAIN_GIRLS_WHITE_HOUSE: "campus_main_girls_white_house",
-  MAIN_GIRLS_AFRICA_HOUSE: "campus_main_girls_africa_house",
-  TECHNO_BOYS: "campus_techno_boys",
-  TECHNO_GIRLS: "campus_techno_girls",
-  AGRI_CAMPUS: "campus_agri",
-} as const;
-
-export type CampusKey = (typeof CAMPUS_KEYS)[keyof typeof CAMPUS_KEYS];
-
 function adminMainKeyboard() {
   return Markup.inlineKeyboard(
     [
@@ -48,8 +30,8 @@ function adminMainKeyboard() {
       Markup.button.callback("🍔 Foods", "admin_foods"),
       Markup.button.callback("👤 Riders", "admin_riders"),
       Markup.button.callback("📋 Orders", "admin_orders"),
-      Markup.button.callback("📦 Contracts", "admin_contracts"),
       Markup.button.callback("📥 Requests", "admin_contract_requests"),
+      Markup.button.callback("💬 Complaints", "admin_complaints"),
       Markup.button.callback("📊 Dashboard", "admin_dashboard"),
     ],
     { columns: 2 }
@@ -65,6 +47,15 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       ...adminMainKeyboard(),
     });
   });
+
+  bot.action("admin_back", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    await ctx.editMessageText("*👋 Welcome to Admin Panel*", {
+      parse_mode: "Markdown",
+      ...adminMainKeyboard(),
+    });
+  });
+
   bot.on("text", async (ctx, next) => {
     const adminId = ctx.from?.id;
     if (!adminId || !ADMIN_IDS.includes(adminId)) return next();
@@ -76,10 +67,10 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     try {
       switch (state.action) {
         case "add_restaurant": {
-          const { error } = await supabase
-            .from("restaurants")
-            .insert([{ name: text }]);
-          if (error) return ctx.reply("❌ Failed to add restaurant.");
+          await db.execute({
+            sql: "INSERT INTO restaurants (name) VALUES (?)",
+            args: [text],
+          });
           await ctx.reply(`✅ Restaurant "${text}" added!`);
           adminStates.delete(adminId);
           break;
@@ -87,11 +78,11 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
         case "edit_restaurant": {
           if (!state.restaurantId) break;
-          await supabase
-            .from("restaurants")
-            .update({ name: text })
-            .eq("id", state.restaurantId);
-          await ctx.reply("✏️ Restaurant updated.");
+          await db.execute({
+            sql: "UPDATE restaurants SET name = ? WHERE id = ?",
+            args: [text, Number(state.restaurantId)],
+          });
+          await ctx.reply("✏️ Restaurant name updated.");
           adminStates.delete(adminId);
           break;
         }
@@ -100,76 +91,39 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           if (!state.restaurantId) break;
           const [name, priceStr] = text.split("|").map((p) => p.trim());
           const price = Number(priceStr);
-          if (!name || isNaN(price)) return ctx.reply("⚠️ Use: Name | Price");
+          if (!name || isNaN(price)) return ctx.reply("⚠️ Use format: Name | Price (e.g. Shiro | 120)");
 
-          await supabase
-            .from("foods")
-            .insert([{ name, price, restaurant_id: state.restaurantId }]);
-
-          adminStates.set(adminId, state);
+          await db.execute({
+            sql: "INSERT INTO foods (restaurant_id, name, price) VALUES (?, ?, ?)",
+            args: [Number(state.restaurantId), name, price],
+          });
 
           await ctx.reply(
-            `✅ Food "${name}" added at ${price} ETB\nSend next food or press 🔙 Done`,
+            `✅ Food "${name}" added at ${price} ETB!`,
             Markup.inlineKeyboard([
-              [
-                Markup.button.callback(
-                  "🔙 Back",
-                  `admin_foods_for_${state.restaurantId}`
-                ),
-              ],
-              [Markup.button.callback("✅ Done", "admin_foods")],
+              [Markup.button.callback("🔙 Back to Foods", `admin_foods_for_${state.restaurantId}`)],
             ])
           );
+          adminStates.delete(adminId);
           break;
         }
 
         case "add_rider": {
-          const [name, phone, campusRaw] = text.split("|").map((s) => s.trim());
-
-          if (!name || !phone || !campusRaw) {
-            return ctx.reply(
-              "⚠️ Invalid format.\nUse:\nName | Phone | Campus\n\nExample:\nBekele | 0977262232 | techno boys"
-            );
-          }
-
-          const cleanCampus = campusRaw
-            .toLowerCase()
-            .replace(/dorm/g, "")
-            .replace(/campus/g, "")
-            .replace(/[^a-z ]/g, "")
-            .replace(/\s+/g, "_")
-            .trim();
-
-          const campusKey = Object.values(CAMPUS_KEYS).find((key) =>
-            key.endsWith(cleanCampus)
-          );
-
-          if (!campusKey) {
-            return ctx.reply(
-              "⚠️ Invalid campus.\nAvailable campus keys:\n\n" +
-                Object.values(CAMPUS_KEYS).join("\n")
-            );
+          const [name, phone, campus] = text.split("|").map((s) => s.trim());
+          if (!name || !phone || !campus) {
+            return ctx.reply("⚠️ Format: Name | Phone | Campus (e.g. Abebe | 0912345678 | Techno)");
           }
 
           const secretCode = generateSecretCode();
-
-          const { error } = await supabase.from("riders").insert([
-            {
-              name,
-              phone,
-              campus: campusKey,
-              secret_code: secretCode,
-              active: true,
-              telegram_id: null,
-            },
-          ]);
-
-          if (error) return ctx.reply("❌ Failed to add rider.");
+          await db.execute({
+            sql: "INSERT INTO riders (name, phone, campus, secret_code, active) VALUES (?, ?, ?, ?, 1)",
+            args: [name, phone, campus, secretCode],
+          });
 
           await ctx.reply(
-            `✅ Rider "${name}" added successfully!\nCampus: ${campusKey}\nSecret code: ${secretCode}\nSend this to rider: /activate ${secretCode}`
+            `✅ Rider *${name}* added!\nActivation Code: \`${secretCode}\`\nTell rider to run:\n\`/activate ${secretCode}\``,
+            { parse_mode: "Markdown" }
           );
-
           adminStates.delete(adminId);
           break;
         }
@@ -178,589 +132,320 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           return next();
       }
     } catch (err) {
-      console.error("[ADMIN] text error:", err);
-      await ctx.reply("❌ An error occurred.");
+      console.error("Admin text handler error:", err);
+      ctx.reply("❌ Error processing admin request.");
     }
-
-    await next();
   });
 
-  bot.action("admin_back", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText("*👋 Admin Panel*", {
+  // Admin Restaurants
+  bot.action("admin_restaurants", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute("SELECT id, name FROM restaurants ORDER BY id ASC");
+    const restaurants = res.rows;
+
+    const rows: any[] = restaurants.map((r: any) => [
+      Markup.button.callback(`${r.name}`, `admin_rest_view_${r.id}`),
+    ]);
+
+    rows.push([Markup.button.callback("➕ Add Restaurant", "admin_add_restaurant")]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    await ctx.editMessageText("🍽 *Restaurants Management:*", {
       parse_mode: "Markdown",
-      ...adminMainKeyboard(),
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
     });
   });
 
-  bot.action("admin_restaurants", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data: restaurants, error } = await supabase
-      .from("restaurants")
-      .select("*")
-      .order("created_at", { ascending: true });
-    if (error) return ctx.editMessageText("❌ Could not load restaurants.");
-    const rows = (restaurants || []).map((r: any) => [
-      Markup.button.callback(`${r.name}`, `admin_restaurant_view_${r.id}`),
-      Markup.button.callback("✏️", `admin_restaurant_edit_${r.id}`),
-      Markup.button.callback("🗑", `admin_restaurant_delete_${r.id}`),
-    ]);
-    rows.push([
-      Markup.button.callback("➕ Add Restaurant", "admin_restaurant_add"),
-    ]);
-    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
-    await ctx.editMessageText("🍽 Restaurants:", Markup.inlineKeyboard(rows));
-  });
-
-  bot.action("admin_restaurant_add", async (ctx) => {
-    await ctx.answerCbQuery();
+  bot.action("admin_add_restaurant", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
     adminStates.set(ctx.from!.id, { action: "add_restaurant" });
-    await ctx.editMessageText(
-      "🏗 Send restaurant name to add (single message)."
-    );
+    await ctx.reply("✏️ Type the name of the new restaurant:");
   });
 
-  bot.action(/admin_restaurant_edit_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const restaurantId = ctx.match[1];
-    adminStates.set(ctx.from!.id, { action: "edit_restaurant", restaurantId });
-    await ctx.editMessageText("✏️ Send new name for the restaurant.");
-  });
-
-  bot.action(/admin_restaurant_delete_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    await supabase.from("restaurants").delete().eq("id", id);
-    await ctx.editMessageText(`🗑 Restaurant deleted: ${id}`);
-  });
-
-  bot.action(/admin_restaurant_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const { data: r } = await supabase
-      .from("restaurants")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (!r) return ctx.answerCbQuery("⚠️ Not found", { show_alert: true });
-    await ctx.editMessageText(
-      `🍽 Restaurant: ${r.name}\nID: ${r.id}`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("Manage Foods", `admin_foods_for_${r.id}`)],
-        [Markup.button.callback("🔙 Back", "admin_restaurants")],
-      ])
-    );
-  });
-
+  // Admin Foods
   bot.action("admin_foods", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data: restaurants } = await supabase
-      .from("restaurants")
-      .select("id,name");
-    if (!restaurants || restaurants.length === 0)
-      return ctx.editMessageText("No restaurants available.");
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute("SELECT id, name FROM restaurants ORDER BY name ASC");
+    const restaurants = res.rows;
+
     const rows = restaurants.map((r: any) => [
       Markup.button.callback(`${r.name}`, `admin_foods_for_${r.id}`),
     ]);
     rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
-    await ctx.editMessageText(
-      "Select restaurant to manage foods:",
-      Markup.inlineKeyboard(rows)
-    );
-  });
 
-  bot.action(/admin_foods_for_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const rid = ctx.match[1];
-    const { data: foods } = await supabase
-      .from("foods")
-      .select("*")
-      .eq("restaurant_id", rid);
-    const rows = (foods || []).map((f: any) => [
-      Markup.button.callback(
-        `${f.name} (${f.price} ETB)`,
-        `admin_food_view_${f.id}`
-      ),
-      Markup.button.callback("✏️", `admin_food_edit_${f.id}`),
-      Markup.button.callback("🗑", `admin_food_delete_${f.id}`),
-    ]);
-    rows.push([Markup.button.callback("➕ Add Food", `admin_food_add_${rid}`)]);
-    rows.push([Markup.button.callback("🔙 Back", "admin_foods")]);
-    await ctx.editMessageText(
-      `🍔 Foods for restaurant ${rid}:`,
-      Markup.inlineKeyboard(rows)
-    );
-  });
-
-  bot.action(/admin_food_add_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const restaurantId = ctx.match[1];
-    adminStates.set(ctx.from!.id, { action: "add_food", restaurantId });
-    await ctx.editMessageText(
-      "🏗 Send food as: Name | Price (e.g. Burger | 50)"
-    );
-  });
-
-  bot.action(/admin_food_edit_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const foodId = ctx.match[1];
-    adminStates.set(ctx.from!.id, { action: "edit_food", foodId });
-    await ctx.editMessageText("✏️ Send new food as: Name | Price");
-  });
-
-  bot.action(/admin_food_delete_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    await supabase.from("foods").delete().eq("id", id);
-    await ctx.editMessageText(`🗑 Food deleted: ${id}`);
-  });
-
-  bot.action(/admin_food_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const { data: f } = await supabase
-      .from("foods")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (!f) return ctx.answerCbQuery("⚠️ Food not found", { show_alert: true });
-    await ctx.editMessageText(
-      `🍔 Food: ${f.name}\nPrice: ${f.price} ETB\nID: ${f.id}`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🔙 Back", "admin_foods")],
-      ])
-    );
-  });
-
-  bot.action("admin_riders", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data: riders } = await supabase.from("riders").select("*");
-    const rows = (riders || []).map((r: any) => [
-      Markup.button.callback(
-        `${r.name} (${r.campus})`,
-        `admin_rider_view_${r.id}`
-      ),
-      Markup.button.callback(
-        r.active ? "🟢" : "🔴",
-        `admin_rider_toggle_${r.id}`
-      ),
-      Markup.button.callback("🗑", `admin_rider_delete_${r.id}`),
-    ]);
-    rows.push([Markup.button.callback("➕ Add Rider", "admin_rider_add")]);
-    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
-    await ctx.editMessageText("👤 Riders:", Markup.inlineKeyboard(rows));
-  });
-
-  bot.action("admin_rider_add", async (ctx) => {
-    await ctx.answerCbQuery();
-    adminStates.set(ctx.from!.id, { action: "add_rider" });
-
-    const campusList = Object.values(CAMPUS_KEYS)
-      .map((key) => `- ${key}`)
-      .join("\n");
-
-    await ctx.editMessageText(
-      `🏗 Send rider info in this format:\nName | Phone | CampusKey\n\nAvailable campus keys:\n${campusList}`
-    );
-  });
-
-  bot.action(/admin_rider_toggle_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (!rider) return ctx.reply("⚠️ Rider not found");
-    await supabase
-      .from("riders")
-      .update({ active: !rider.active })
-      .eq("id", id);
-    await ctx.reply(
-      `Rider ${rider.name} is now ${
-        !rider.active ? "active 🟢" : "inactive 🔴"
-      }`
-    );
-  });
-
-  bot.action(/admin_rider_delete_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    await supabase.from("riders").delete().eq("id", id);
-    await ctx.reply(`🗑 Rider deleted: ${id}`);
-  });
-
-  function escapeMarkdown(text: string): string {
-    if (typeof text !== "string") return String(text);
-
-    return text
-      .replace(/_/g, "\\_")
-      .replace(/\*/g, "\\*")
-      .replace(/\[/g, "\\[")
-      .replace(/\]/g, "\\]")
-      .replace(/\(/g, "\\(")
-      .replace(/\)/g, "\\)")
-      .replace(/~/g, "\\~")
-      .replace(/`/g, "\\`")
-      .replace(/>/g, "\\>")
-      .replace(/#/g, "\\#")
-      .replace(/\+/g, "\\+")
-      .replace(/-/g, "\\-")
-      .replace(/=/g, "\\=")
-      .replace(/\|/g, "\\|")
-      .replace(/{/g, "\\{")
-      .replace(/}/g, "\\}")
-      .replace(/\./g, "\\.")
-      .replace(/!/g, "\\!");
-  }
-  bot.action(/admin_rider_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-
-    const { data: rider, error } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Supabase Error fetching rider details:", error);
-      return ctx.reply("❌ Error fetching rider details.");
-    }
-
-    if (!rider) {
-      return ctx.reply("⚠️ Rider not found.");
-    }
-
-    const safeName = escapeMarkdown(rider.name || "N/A");
-    const safePhone = escapeMarkdown(rider.phone || "N/A");
-    const safeCampus = escapeMarkdown(rider.campus || "N/A");
-    const safeId = escapeMarkdown(String(rider.id));
-
-    const status = rider.active ? "🟢 Active" : "🔴 Inactive";
-    const riderDetails = `
-**👤 Rider Details: ${safeName}**
-
-* **ID:** ${safeId}
-* **Full Name:** ${safeName}
-* **Phone:** ${safePhone}
-* **Campus:** ${safeCampus}
-* **Status:** ${status}
-`;
-
-    const keyboard = [
-      [
-        Markup.button.callback(
-          "✏️ Modify Rider",
-          `admin_rider_modify_${rider.id}`
-        ),
-      ],
-      [
-        Markup.button.callback(
-          rider.active ? "Toggle Inactive 🔴" : "Toggle Active 🟢",
-          `admin_rider_toggle_${rider.id}`
-        ),
-      ],
-      [
-        Markup.button.callback(
-          "🗑 Delete Rider",
-          `admin_rider_delete_${rider.id}`
-        ),
-      ],
-      [Markup.button.callback("🔙 Back to Riders List", "admin_riders")],
-    ];
-
-    await ctx.editMessageText(riderDetails, {
+    await ctx.editMessageText("🍔 *Select a restaurant to manage foods:*", {
       parse_mode: "Markdown",
-      ...Markup.inlineKeyboard(keyboard),
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
     });
   });
 
+  bot.action(/^admin_foods_for_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const restId = Number(ctx.match[1]);
+    const foodsRes = await db.execute({
+      sql: "SELECT id, name, price FROM foods WHERE restaurant_id = ? ORDER BY name ASC",
+      args: [restId],
+    });
+
+    const rows = foodsRes.rows.map((f: any) => [
+      Markup.button.callback(`🍱 ${f.name} (${f.price} ETB)`, `admin_food_view_${f.id}`),
+    ]);
+
+    rows.push([Markup.button.callback("➕ Add New Food Item", `admin_add_food_to_${restId}`)]);
+    rows.push([Markup.button.callback("🔙 Back", "admin_foods")]);
+
+    await ctx.editMessageText(`🍔 *Manage Food Items:*`, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
+  });
+
+  bot.action(/^admin_add_food_to_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const restId = Number(ctx.match[1]);
+    adminStates.set(ctx.from!.id, { action: "add_food", restaurantId: restId });
+    await ctx.reply("✏️ Type food details in format: `Name | Price`\nExample: `Special Shiro | 120`", { parse_mode: "Markdown" });
+  });
+
+  // Admin Riders
+  bot.action("admin_riders", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute("SELECT id, name, phone, campus, secret_code, active FROM riders ORDER BY name ASC");
+    const riders = res.rows;
+
+    let text = "🛵 *Riders Directory:*\n\n";
+    if (riders.length === 0) text += "No riders registered yet.\n";
+    else {
+      riders.forEach((r: any, i: number) => {
+        text += `${i + 1}. *${r.name}* (📱 ${r.phone}) — Campus: ${r.campus}\nCode: \`${r.secret_code}\` | Active: ${r.active ? "Yes" : "No"}\n\n`;
+      });
+    }
+
+    const rows = [
+      [Markup.button.callback("➕ Add Rider", "admin_add_rider")],
+      [Markup.button.callback("🔙 Back", "admin_back")],
+    ];
+
+    await ctx.editMessageText(text, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
+  });
+
+  bot.action("admin_add_rider", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    adminStates.set(ctx.from!.id, { action: "add_rider" });
+    await ctx.reply("✏️ Type rider details in format:\n`Name | Phone | Campus`\nExample: `Bekele | 0912345678 | Techno`", { parse_mode: "Markdown" });
+  });
+
+  // Admin Orders
   bot.action("admin_orders", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data: orders } = await supabase
-      .from("orders")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (!orders || orders.length === 0)
-      return ctx.editMessageText("No orders available.");
-    const rows = orders.map((o: any) => [
-      Markup.button.callback(
-        `${o.user_name} | ${o.campus} | ${o.status}`,
-        `admin_order_view_${o.id}`
-      ),
-      Markup.button.callback("🗑 Delete", `admin_order_delete_${o.id}`),
-    ]);
-    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
-    await ctx.editMessageText("📋 Orders:", Markup.inlineKeyboard(rows));
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute("SELECT id, user_name, phone, restaurant, total_price, status FROM orders ORDER BY id DESC LIMIT 20");
+    const orders = res.rows;
+
+    let text = "📋 *Recent Orders:*\n\n";
+    if (orders.length === 0) text += "No orders placed yet.\n";
+    else {
+      orders.forEach((o: any, i: number) => {
+        text += `${i + 1}. *Order #${o.id}* — ${o.user_name} (${o.restaurant})\nTotal: ${o.total_price} ETB | Status: *${o.status}*\n\n`;
+      });
+    }
+
+    const rows = [[Markup.button.callback("🔙 Back", "admin_back")]];
+    await ctx.editMessageText(text, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
   });
 
-  bot.action(/admin_order_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const { data: o } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (!o)
-      return ctx.answerCbQuery("⚠️ Order not found", { show_alert: true });
-    await ctx.editMessageText(
-      `🧾 Order ID: ${o.id}\nUser: ${o.user_name}\nPhone: ${o.phone}\nCampus: ${o.campus}\nRestaurant: ${o.restaurant}\nFoods: ${o.foods}\nTotal: ${o.total_price} ETB\nStatus: ${o.status}`,
-      Markup.inlineKeyboard([
-        [
-          Markup.button.callback(
-            o.status === "Pending" ? "✅ Complete Order" : "↩️ Mark Pending",
-            `admin_order_toggle_${o.id}`
-          ),
-        ],
-        [Markup.button.callback("🔙 Back", "admin_orders")],
-      ])
-    );
-  });
-
-  bot.action(/admin_order_toggle_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const { data: o } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (!o) return ctx.reply("⚠️ Order not found");
-    const newStatus = o.status === "Pending" ? "Completed" : "Pending";
-    await supabase.from("orders").update({ status: newStatus }).eq("id", id);
-    await ctx.reply(`✅ Order status updated to ${newStatus}`);
-    ctx.deleteMessage();
-  });
-
-  bot.action(/admin_order_delete_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    await supabase.from("orders").delete().eq("id", id);
-    await ctx.reply(`🗑 Order deleted: ${id}`);
-  });
-  bot.action("admin_contracts", async (ctx) => {
-    await ctx.answerCbQuery();
-    const { data: contracts, error } = await supabase
-      .from("contracts")
-      .select("*, users(name, phone, campus)")
-      .order("created_at", { ascending: false });
-
-    if (error || !contracts || contracts.length === 0)
-      return ctx.editMessageText("📦 No contracts available.");
-
-    const rows = contracts.map((c: any) => [
-      Markup.button.callback(
-        `Contract: ${c.title || c.id} | ${c.status}`,
-        `admin_contract_view_${c.id}`
-      ),
-    ]);
-    rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
-
-    await ctx.editMessageText("📦 Contracts:", Markup.inlineKeyboard(rows));
-  });
-
-  bot.action(/admin_contract_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-
-    const id = ctx.match[1];
-
-    const { data: c, error } = await supabase
-      .from("contracts")
-      .select("*, users(name, phone, campus)")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (error || !c)
-      return ctx.answerCbQuery("⚠️ Contract not found", { show_alert: true });
-
-    await ctx.editMessageText(
-      `📦 **Contract Details**  
-ID: ${c.id}  
-Active: ${c.is_active ? "Yes" : "No"}  
-Created: ${new Date(c.created_at).toLocaleString()}
-
-👤 **User Info**  
-Name: ${c.users?.name || "Unknown"}  
-Phone: ${c.users?.phone || "-"}  
-Campus: ${c.users?.campus || "-"}
-
-📊 **Order Details**  
-Order Limit: ${c.order_limit}  
-Remaining Orders: ${c.remaining_orders}
-    `,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🔙 Back", "admin_contracts")],
-      ])
-    );
-  });
-
+  // Contract Requests Management (Requirement 10)
   bot.action("admin_contract_requests", async (ctx) => {
-    await ctx.answerCbQuery();
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute({
+      sql: "SELECT id, user_name, phone, campus, request_type, restaurant_name, status, created_at FROM contract_requests ORDER BY id DESC LIMIT 20",
+      args: [],
+    });
+    const requests = res.rows;
 
-    const { data: requests, error } = await supabase
-      .from("contract_requests")
-      .select("id, username, full_name, phone, status")
-      .order("created_at", { ascending: false });
-
-    if (error || !requests || requests.length === 0) {
-      return ctx.editMessageText("📥 No requests available.");
+    if (requests.length === 0) {
+      return ctx.editMessageText(
+        "📥 *Contract Requests*\n\n📂 No pending requests.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "admin_back")]]).reply_markup,
+        }
+      );
     }
 
-    const rows = requests.map((r: any) => [
-      Markup.button.callback(
-        `${r.full_name ?? r.username ?? "Unknown"} | ${r.status ?? "Pending"}`,
-        `admin_request_view_${r.id}`
-      ),
-    ]);
-
+    const rows = requests.map((r: any) => {
+      const typeLabel = r.request_type === "food_contract" ? "🍱 Food" : "🚚 Delivery";
+      return [
+        Markup.button.callback(
+          `[${typeLabel}] ${r.user_name} (${r.status || "pending"})`,
+          `admin_req_view_${r.id}`
+        ),
+      ];
+    });
     rows.push([Markup.button.callback("🔙 Back", "admin_back")]);
 
-    await ctx.editMessageText(
-      "📥 Contract Requests:",
-      Markup.inlineKeyboard(rows)
-    );
+    await ctx.editMessageText("📥 *Contract Requests:*", {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
   });
 
-  bot.action(/admin_request_view_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
+  bot.action(/^admin_req_view_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const reqId = Number(ctx.match[1]);
+    const res = await db.execute({
+      sql: "SELECT * FROM contract_requests WHERE id = ?",
+      args: [reqId],
+    });
+    const r = res.rows[0];
 
-    const id = ctx.match[1];
-    const { data: r } = await supabase
-      .from("contract_requests")
-      .select("id, username, full_name, phone, status")
-      .eq("id", id)
-      .maybeSingle();
+    if (!r) return ctx.reply("⚠️ Request not found.");
 
-    if (!r) {
-      return ctx.answerCbQuery("⚠️ Request not found", { show_alert: true });
+    const typeLabel = r.request_type === "food_contract" ? "🍱 Food Contract" : "🚚 Delivery Contract";
+
+    const detailText =
+      `📥 *Contract Request Details*\n\n` +
+      `🆔 *Request ID:* #${r.id}\n` +
+      `📋 *Type:* ${typeLabel}\n` +
+      `👤 *Customer Name:* ${r.user_name}\n` +
+      `📞 *Phone:* ${r.phone}\n` +
+      `🏫 *Campus:* ${r.campus || "N/A"}\n` +
+      `${r.request_type === "food_contract" ? `🏢 *Restaurant:* ${r.restaurant_name}\n` : ""}` +
+      `📦 *Status:* ${r.status}\n` +
+      `🕒 *Date:* ${r.created_at ? new Date(String(r.created_at)).toLocaleString() : "Recent"}`;
+
+    const rows = [
+      [
+        Markup.button.callback("✅ Approve Contract", `admin_req_approve_${r.id}`),
+        Markup.button.callback("❌ Reject", `admin_req_reject_${r.id}`),
+      ],
+      [Markup.button.callback("🔙 Back to Requests", "admin_contract_requests")],
+    ];
+
+    await ctx.editMessageText(detailText, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
+  });
+
+  bot.action(/^admin_req_approve_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const reqId = Number(ctx.match[1]);
+
+    const res = await db.execute({
+      sql: "SELECT * FROM contract_requests WHERE id = ?",
+      args: [reqId],
+    });
+    const r = res.rows[0];
+
+    if (!r) return ctx.reply("⚠️ Request not found.");
+
+    if (r.request_type === "food_contract") {
+      await db.execute({
+        sql: `INSERT INTO restaurant_contracts (telegram_id, restaurant_id, restaurant_name, remaining_meals, is_active)
+              VALUES (?, ?, ?, 30, 1)`,
+        args: [
+          Number(r.telegram_id),
+          r.restaurant_id ? Number(r.restaurant_id) : null,
+          String(r.restaurant_name || "Custom Restaurant"),
+        ],
+      });
+
+      try {
+        await bot.telegram.sendMessage(
+          Number(r.telegram_id),
+          `✅ *Food Contract Approved!*\n\nYour food contract request for *${r.restaurant_name}* has been approved by admin!`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    } else {
+      await db.execute({
+        sql: `INSERT INTO delivery_contracts (telegram_id, campus, remaining_deliveries, is_active)
+              VALUES (?, ?, 30, 1)`,
+        args: [Number(r.telegram_id), String(r.campus || "")],
+      });
+
+      try {
+        await bot.telegram.sendMessage(
+          Number(r.telegram_id),
+          `✅ *Delivery Contract Approved!*\n\nYour delivery contract request has been approved by admin!`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
     }
 
-    await ctx.editMessageText(
-      `📥 Request ID: ${r.id}\n` +
-        `Username: ${r.username ?? "N/A"}\n` +
-        `Full Name: ${r.full_name ?? "N/A"}\n` +
-        `Phone: ${r.phone ?? "N/A"}\n` +
-        `Status: ${r.status ?? "Pending"}`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Approve", `admin_request_approve_${r.id}`)],
-        [Markup.button.callback("❌ Reject", `admin_request_reject_${r.id}`)],
-        [Markup.button.callback("🔙 Back", "admin_contract_requests")],
-      ])
-    );
+    await db.execute({
+      sql: "UPDATE contract_requests SET status = 'approved' WHERE id = ?",
+      args: [reqId],
+    });
+
+    await ctx.editMessageText(`✅ Request #${reqId} approved and contract activated!`);
   });
 
-  bot.action(/admin_request_approve_(\d+)/, async (ctx) => {
-    const requestId = Number(ctx.match[1]);
+  bot.action(/^admin_req_reject_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const reqId = Number(ctx.match[1]);
+    await db.execute({
+      sql: "UPDATE contract_requests SET status = 'rejected' WHERE id = ?",
+      args: [reqId],
+    });
+    await ctx.editMessageText(`❌ Request #${reqId} marked as rejected.`);
+  });
 
-    try {
-      const { data: request } = await supabase
-        .from("contract_requests")
-        .select("*")
-        .eq("id", requestId)
-        .maybeSingle();
+  // Admin Complaints
+  bot.action("admin_complaints", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const res = await db.execute("SELECT * FROM complaints ORDER BY id DESC LIMIT 20");
+    const complaints = res.rows;
 
-      if (!request) return ctx.reply("❌ Request not found.");
-
-      await supabase.from("users").upsert(
-        {
-          telegram_id: request.user_id,
-          name: request.full_name,
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: "telegram_id" }
-      );
-
-      await supabase.from("contracts").upsert(
-        {
-          user_id: request.user_id,
-          order_limit: 30,
-          remaining_orders: 30,
-          is_active: true,
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
-
-      await supabase
-        .from("contract_requests")
-        .update({ status: "approved" })
-        .eq("id", requestId);
-
-      await ctx.telegram.sendMessage(
-        request.user_id,
-        "✅ Your contract request has been approved! You can now choose *Use Contract* at checkout.",
-        { parse_mode: "Markdown" }
-      );
-
-      return ctx.editMessageText(
-        `✅ Request #${requestId} approved and contract created.`
-      );
-    } catch (err) {
-      console.error("Admin approve contract error:", err);
-      return ctx.reply("❌ Failed to approve contract. See logs.");
+    if (complaints.length === 0) {
+      return ctx.editMessageText("💬 *User Complaints*\n\n📂 No complaints submitted yet.", {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "admin_back")]]).reply_markup,
+      });
     }
+
+    const list = complaints
+      .map(
+        (c: any, index: number) =>
+          `*${index + 1}. 👤 ${c.user_name}* (📞 ${c.user_phone})\n💬 ${c.message}\n🕒 ${c.created_at ? new Date(c.created_at).toLocaleString() : "Recently"}`
+      )
+      .join("\n\n---\n\n");
+
+    await ctx.editMessageText(`💬 *User Complaints (Latest ${complaints.length})*\n\n${list}`, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "admin_back")]]).reply_markup,
+    });
   });
 
-  bot.action(/admin_request_reject_(\d+)/, async (ctx) => {
-    const requestId = Number(ctx.match[1]);
-
-    try {
-      await supabase
-        .from("contract_requests")
-        .update({ status: "rejected" })
-        .eq("id", requestId);
-
-      return ctx.editMessageText(`❌ Request #${requestId} rejected`);
-    } catch (err) {
-      console.error("Admin reject contract error:", err);
-      return ctx.reply("❌ Failed to reject contract. See logs.");
-    }
-  });
-
+  // Admin Dashboard
   bot.action("admin_dashboard", async (ctx) => {
-    await ctx.answerCbQuery();
-    try {
-      const [
-        restaurantsCount,
-        foodsCount,
-        ridersCount,
-        ordersCount,
-        contractsCount,
-      ] = await Promise.all([
-        supabase
-          .from("restaurants")
-          .select("id")
-          .then((r) => r.data?.length ?? 0),
-        supabase
-          .from("foods")
-          .select("id")
-          .then((r) => r.data?.length ?? 0),
-        supabase
-          .from("riders")
-          .select("id")
-          .then((r) => r.data?.length ?? 0),
-        supabase
-          .from("orders")
-          .select("id")
-          .then((r) => r.data?.length ?? 0),
-        supabase
-          .from("contracts")
-          .select("id")
-          .then((r) => r.data?.length ?? 0),
-      ]);
-      const text = `📊 Dashboard\n\n🍽 Restaurants: ${restaurantsCount}\n🍔 Foods: ${foodsCount}\n🛵 Riders: ${ridersCount}\n🧾 Orders: ${ordersCount}\n📦 Contracts: ${contractsCount}`;
-      await ctx.editMessageText(
-        text,
-        Markup.inlineKeyboard([
-          [Markup.button.callback("🔙 Back", "admin_back")],
-        ])
-      );
-    } catch {
-      await ctx.editMessageText("❌ Failed to load dashboard.");
-    }
+    ctx.answerCbQuery().catch(() => {});
+    const [rRes, fRes, rdRes, oRes, reqRes] = await Promise.all([
+      db.execute("SELECT COUNT(*) as count FROM restaurants"),
+      db.execute("SELECT COUNT(*) as count FROM foods"),
+      db.execute("SELECT COUNT(*) as count FROM riders"),
+      db.execute("SELECT COUNT(*) as count FROM orders"),
+      db.execute("SELECT COUNT(*) as count FROM contract_requests"),
+    ]);
+
+    const text =
+      `📊 *Admin Dashboard*\n\n` +
+      `🍽 Restaurants: ${rRes.rows[0]?.count ?? 0}\n` +
+      `🍔 Foods: ${fRes.rows[0]?.count ?? 0}\n` +
+      `🛵 Riders: ${rdRes.rows[0]?.count ?? 0}\n` +
+      `🧾 Orders: ${oRes.rows[0]?.count ?? 0}\n` +
+      `📥 Contract Requests: ${reqRes.rows[0]?.count ?? 0}`;
+
+    await ctx.editMessageText(text, {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "admin_back")]]).reply_markup,
+    });
   });
 
   console.log("[ADMIN] setupAdminHandler initialized");

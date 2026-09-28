@@ -22,15 +22,19 @@ export interface UserState {
     | "profile_ask_phone"
     | "profile_ask_campus"
     | "ask_restaurant"
+    | "ask_restaurant_contract"
+    | "ask_delivery_contract"
     | "select_food"
     | "waiting_for_quantity"
+    | "waiting_for_custom_quantity"
     | "choose_delivery_type"
     | "confirm_order"
     | "select_meal_type"
     | "ask_custom_price"
     | "custom_restaurant_name"
     | "custom_food_name"
-    | "ask_payment_mode";
+    | "ask_payment_mode"
+    | "waiting_for_complaint";
 
   foods: FoodItem[];
 
@@ -51,6 +55,10 @@ export interface UserState {
   mealType?: string;
   isRider?: boolean;
   paymentMode?: "normal" | "restaurant_contract";
+
+  hasRestaurantContract?: boolean;
+  hasDeliveryContract?: boolean;
+  isSubmittingOrder?: boolean;
 }
 
 export const userState = new Map<number, UserState>();

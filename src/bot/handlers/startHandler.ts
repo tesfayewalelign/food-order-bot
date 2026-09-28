@@ -1,15 +1,12 @@
 import { Telegraf, Context, Markup } from "telegraf";
-import { supabase } from "../../config/supabase.js";
+import { db } from "../../config/db.js";
 import {
   resetUserState,
   initUserState,
   userState,
   UserState,
 } from "../../helpers/state.js";
-import {
-  getMainMenuKeyboard,
-  campusKeyboard,
-} from "../../helpers/keyboards.js";
+import { getMainMenuKeyboard } from "../../helpers/keyboards.js";
 import { riderMenuKeyboard } from "../../helpers/keyboards.js";
 
 function isContactMessage(
@@ -33,20 +30,21 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       resetUserState(userId);
 
-      const { data: rider } = await supabase
-        .from("riders")
-        .select("*")
-        .eq("telegram_id", userId)
-        .maybeSingle();
+      // Check if user is a rider
+      const riderRes = await db.execute({
+        sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
+        args: [userId],
+      });
+      const rider = riderRes.rows[0];
 
-      if (rider && rider.active) {
+      if (rider) {
         userState.set(userId, {
           isRider: true,
-          campus: rider.campus,
+          campus: String(rider.campus),
           step: "idle",
           username: ctx.from?.username,
-          name: rider.name,
-          phone: rider.phone,
+          name: String(rider.name),
+          phone: String(rider.phone),
           foods: [],
           cartFoods: [],
           deliveryType: undefined,
@@ -55,22 +53,38 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         return ctx.reply(`🚴‍♂️ Welcome back ${rider.name}!`, riderMenuKeyboard);
       }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("telegram_id, name, phone, campus")
-        .eq("telegram_id", userId)
-        .maybeSingle();
+      // Check user profile
+      const profRes = await db.execute({
+        sql: "SELECT telegram_id, name, phone, campus FROM profiles WHERE telegram_id = ?",
+        args: [userId],
+      });
+      const profile = profRes.rows[0];
 
       if (!profile) {
         const state: UserState = await initUserState(userId);
         state.step = "profile_ask_name";
         userState.set(userId, state);
-        return ctx.reply("👤 Welcome! Please enter your full name:");
+        return ctx.reply(
+          "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to get started:",
+          { parse_mode: "Markdown" }
+        );
       }
 
+      userState.set(userId, {
+        step: "idle",
+        name: String(profile.name),
+        phone: String(profile.phone),
+        campus: String(profile.campus || ""),
+        foods: [],
+        cartFoods: [],
+      });
+
       return ctx.reply(
-        `👋 Welcome back ${profile.name}!`,
-        getMainMenuKeyboard(false, false)
+        `👋 *Welcome back, ${profile.name}!*\n\nWhat would you like to do today?`,
+        {
+          parse_mode: "Markdown",
+          ...getMainMenuKeyboard(false, false),
+        }
       );
     } catch (err) {
       console.error("Start command error:", err);
@@ -95,35 +109,41 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       userState.set(userId, state);
 
       return ctx.reply(
-        "📞 Please share your phone number:",
-        Markup.keyboard([
-          Markup.button.contactRequest("📱 Share Phone"),
-        ]).resize()
+        `📞 Thank you, *${state.name}*! Please share your phone number to complete registration:`,
+        {
+          parse_mode: "Markdown",
+          ...Markup.keyboard([
+            Markup.button.contactRequest("📱 Share Phone"),
+          ]).resize(),
+        }
       );
     }
 
-    if (state.step === "profile_ask_phone" && isContactMessage(msg)) {
-      state.phone = msg.contact.phone_number;
-      state.step = "profile_ask_campus";
-      userState.set(userId, state);
-
-      return ctx.reply("🏫 Select your campus:", campusKeyboard);
-    }
-
-    if (state.step === "profile_ask_campus" && "text" in msg) {
-      state.campus = msg.text.trim();
+    if (
+      state.step === "profile_ask_phone" &&
+      (isContactMessage(msg) || ("text" in msg && msg.text))
+    ) {
+      const phone = isContactMessage(msg)
+        ? msg.contact.phone_number
+        : msg.text.trim();
+      state.phone = phone;
       state.step = "idle";
       userState.set(userId, state);
-      await supabase.from("profiles").upsert({
-        telegram_id: userId,
-        name: state.name,
-        phone: state.phone,
-        campus: state.campus,
+
+      await db.execute({
+        sql: `INSERT INTO profiles (telegram_id, name, phone, campus)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name, phone=excluded.phone;`,
+        args: [userId, state.name || "User", state.phone || "", state.campus || ""],
       });
 
       return ctx.reply(
-        `✅ Registration complete, ${state.name}! You can now use the bot.`,
-        getMainMenuKeyboard(false, false)
+        `👋 *Welcome to Campus Food Delivery, ${state.name}!*\n\n` +
+          `🎉 Registration complete! You can now browse food, view past orders, or contact support using the buttons below.`,
+        {
+          parse_mode: "Markdown",
+          ...getMainMenuKeyboard(false, false),
+        }
       );
     }
 
@@ -140,19 +160,19 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!code) return ctx.reply("❗ Invalid code format.");
 
     try {
-      const { data: rider } = await supabase
-        .from("riders")
-        .select("*")
-        .eq("secret_code", code)
-        .single();
+      const riderRes = await db.execute({
+        sql: "SELECT * FROM riders WHERE secret_code = ?",
+        args: [String(code || "")],
+      });
+      const rider = riderRes.rows[0];
 
       if (!rider)
         return ctx.reply("❌ Rider not found. Please check your code.");
 
-      await supabase
-        .from("riders")
-        .update({ telegram_id: ctx.from!.id })
-        .eq("id", rider.id);
+      await db.execute({
+        sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
+        args: [ctx.from!.id, Number(rider.id)],
+      });
 
       return ctx.reply(
         `✅ Activation successful! Welcome Rider ${rider.name} 🚴‍♂️`,

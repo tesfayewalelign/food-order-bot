@@ -1,5 +1,5 @@
 import { Telegraf, Context, Markup } from "telegraf";
-import { supabase } from "../../config/supabase.js";
+import { db } from "../../config/db.js";
 
 const ADMIN_IDS: number[] = (process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
@@ -16,22 +16,33 @@ function isTextMessage(
   );
 }
 
-export const riderMenuKeyboard = Markup.keyboard([
-  ["📦 My Deliveries"],
-  ["📅 Schedule"],
-  ["🏠 Main Menu"],
-]).resize();
+function normalizePhone(phone?: string): string {
+  if (!phone) return "";
+  let cleaned = phone.replace(/[^0-9+]/g, "");
+  if (cleaned.startsWith("09")) {
+    cleaned = "+2519" + cleaned.slice(2);
+  } else if (cleaned.startsWith("07")) {
+    cleaned = "+2517" + cleaned.slice(2);
+  } else if (cleaned.startsWith("251")) {
+    cleaned = "+" + cleaned;
+  }
+  return cleaned;
+}
 
 export function setupDriverHandler(bot: Telegraf<Context>) {
+  bot.hears("📦 My Deliveries", handleMyDeliveries);
+  bot.hears("📅 Schedule", handleSchedule);
+  bot.hears("🏠 Main Menu", handleMainMenu);
+
   bot.start(async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", userId)
-      .maybeSingle();
+    const res = await db.execute({
+      sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [userId],
+    });
+    const rider = res.rows[0];
 
     if (rider) {
       return ctx.reply(
@@ -47,53 +58,45 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
         "🛵 Welcome Rider!\nPlease activate your account with the code sent by admin:\n/activate <4-digit-code>"
       );
     }
-
-    bot.hears("📦 My Deliveries", handleMyDeliveries);
-    bot.hears("📅 Schedule", handleSchedule);
-    bot.hears("🏠 Main Menu", handleMainMenu);
   });
+
   async function handleMyDeliveries(ctx: Context) {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
 
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("id, name")
-      .eq("telegram_id", telegramId)
-      .single();
+    const res = await db.execute({
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = res.rows[0];
 
     if (!rider) {
       return ctx.reply("⚠️ You are not activated.");
     }
 
-    const since = new Date();
-    since.setHours(since.getHours() - 24);
+    const ordersRes = await db.execute({
+      sql: "SELECT id, user_name, phone, total_price, created_at FROM orders WHERE rider_id = ? ORDER BY id DESC LIMIT 20",
+      args: [Number(rider.id)],
+    });
+    const orders = ordersRes.rows;
 
-    const { data: orders } = await supabase
-      .from("orders")
-      .select("id, delivered_at")
-      .eq("rider_id", rider.id)
-      .eq("status", "delivered")
-      .gte("delivered_at", since.toISOString())
-      .order("delivered_at", { ascending: false });
-
-    if (!orders || orders.length === 0) {
-      return ctx.reply("📦 No deliveries in the last 24 hours.");
+    if (orders.length === 0) {
+      return ctx.reply("📦 No deliveries assigned to you yet.");
     }
 
-    let message = `📦 *Your Deliveries (Last 24 Hours)*\n\n`;
-    orders.forEach((o, i) => {
-      message += `${i + 1}. Order #${o.id}\n`;
+    let message = `📦 *Your Deliveries*\n\n`;
+    orders.forEach((o: any, i: number) => {
+      const normPhone = normalizePhone(String(o.phone));
+      const telLink = normPhone ? `[${o.phone}](tel:${normPhone})` : o.phone;
+      message += `${i + 1}. *Order #${o.id}* — ${o.user_name} (📞 ${telLink})\nTotal: ${o.total_price} ETB\n\n`;
     });
-
-    message += `\n✅ Total Delivered: *${orders.length}*`;
 
     return ctx.reply(message, { parse_mode: "Markdown" });
   }
 
   async function handleSchedule(ctx: Context) {
     return ctx.reply(
-      "📅 *Your Schedule*\n\n🕘 9:00 AM – 6:00 PM\n📍 Campus Area",
+      "📅 *Your Schedule*\n\n🕘 9:00 AM – 9:00 PM\n📍 Campus Area",
       { parse_mode: "Markdown" }
     );
   }
@@ -109,6 +112,71 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     );
   }
 
+  // Accept Order Callback with Race Condition Guard
+  bot.action(/^accept_order_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const match = ctx.match;
+    if (!match) return;
+
+    const orderId = Number(match[1]);
+    const telegramId = ctx.from!.id;
+
+    const riderRes = await db.execute({
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = riderRes.rows[0];
+
+    if (!rider) {
+      return ctx.reply("⚠️ You are not an activated rider.");
+    }
+
+    // Atomic UPDATE status='accepted' WHERE status='pending'
+    const updateRes = await db.execute({
+      sql: "UPDATE orders SET status = 'accepted', rider_id = ?, rider_name = ? WHERE id = ? AND status = 'pending'",
+      args: [Number(rider.id), String(rider.name), orderId],
+    });
+
+    if (updateRes.rowsAffected === 0) {
+      return ctx.editMessageText(
+        `❌ *Order #${orderId} was already accepted by another rider.*`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    const orderRes = await db.execute({
+      sql: "SELECT telegram_id, user_name FROM orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+
+    if (order && order.telegram_id) {
+      try {
+        await ctx.telegram.sendMessage(
+          Number(order.telegram_id),
+          `🚴‍♂️ *Order Accepted!*\n\nRider *${rider.name}* has accepted your order #${orderId} and is on the way!`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    }
+
+    await ctx.editMessageText(
+      `✅ *Order #${orderId} Accepted!*\n\nYou are assigned to deliver this order.`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action(/^reject_order_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const match = ctx.match;
+    if (!match) return;
+
+    const orderId = Number(match[1]);
+    await ctx.editMessageText(`❌ *Order #${orderId} declined.*`, {
+      parse_mode: "Markdown",
+    });
+  });
+
   bot.command("activate", async (ctx) => {
     if (!isTextMessage(ctx) || !ctx.from?.id) return;
 
@@ -117,18 +185,18 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     const code = match[1];
 
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("secret_code", code)
-      .maybeSingle();
+    const riderRes = await db.execute({
+      sql: "SELECT * FROM riders WHERE secret_code = ?",
+      args: [String(code || "")],
+    });
+    const rider = riderRes.rows[0];
 
     if (!rider) return ctx.reply("❌ Invalid secret code.");
 
-    await supabase
-      .from("riders")
-      .update({ telegram_id: ctx.from.id })
-      .eq("id", rider.id);
+    await db.execute({
+      sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
+      args: [ctx.from.id, Number(rider.id)],
+    });
 
     ctx.reply(
       `✅ Rider activated! Welcome ${rider.name}!\nChoose an option:`,
@@ -138,164 +206,5 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
         ["🏠 Main Menu"],
       ]).resize()
     );
-  });
-
-  bot.command("my_orders", async (ctx) => {
-    if (!ctx.from?.id) return;
-
-    const riderId = ctx.from.id;
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", riderId)
-      .maybeSingle();
-
-    if (!rider)
-      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
-
-    const { data: orders } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("campus", rider.campus)
-      .eq("status", "pending")
-      .order("id");
-
-    if (!orders || orders.length === 0)
-      return ctx.reply("📭 No new orders available.");
-
-    let text = "📦 Pending Orders:\n";
-    for (const o of orders) {
-      text += `\nID: ${o.id} | User: ${o.user_name} | Phone: ${o.phone} | Foods: ${o.foods}`;
-      text += `\n/accept ${o.id} - Accept | /reject ${o.id} - Reject\n`;
-    }
-
-    ctx.reply(text);
-  });
-
-  bot.command("accept", async (ctx) => {
-    if (!isTextMessage(ctx) || !ctx.from?.id) return;
-
-    const match = ctx.message.text.trim().match(/^\/accept\s+(\d+)$/);
-    if (!match) return ctx.reply("⚠️ Use: /accept <order-id>");
-
-    const orderId = Number(match[1]);
-    const riderId = ctx.from.id;
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", riderId)
-      .maybeSingle();
-
-    if (!rider)
-      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
-
-    await supabase
-      .from("orders")
-      .update({ status: "Accepted", rider_id: rider.id })
-      .eq("id", orderId);
-
-    ctx.reply(`✅ Order #${orderId} accepted!`);
-  });
-
-  bot.command("reject", async (ctx) => {
-    if (!isTextMessage(ctx) || !ctx.from?.id) return;
-
-    const match = ctx.message.text.trim().match(/^\/reject\s+(\d+)$/);
-    if (!match) return ctx.reply("⚠️ Use: /reject <order-id>");
-
-    const orderId = Number(match[1]);
-    const riderId = ctx.from.id;
-
-    const { data: rider } = await supabase
-      .from("riders")
-      .select("*")
-      .eq("telegram_id", riderId)
-      .maybeSingle();
-
-    if (!rider)
-      return ctx.reply("⚠️ You are not activated. Use /activate <code>");
-
-    await supabase
-      .from("orders")
-      .update({ status: "Rejected" })
-      .eq("id", orderId);
-
-    ctx.reply(`❌ Order #${orderId} rejected.`);
-  });
-
-  bot.command("rider_help", (ctx) => {
-    ctx.reply(
-      `🛵 Rider Commands:
-/activate <4-digit-code>
-/my_orders
-/accept <order-id>
-/reject <order-id>`
-    );
-  });
-
-  bot.action(/rider_order_approve_(\d+)/, async (ctx) => {
-    const orderUserId = ctx.match[1];
-
-    const { data: rider, error: riderError } = await supabase
-      .from("riders")
-      .select("id, name")
-      .eq("telegram_id", ctx.from!.id)
-      .single();
-
-    if (riderError || !rider)
-      return ctx.answerCbQuery("❌ Rider not found in database");
-
-    const { data: order, error } = await supabase
-      .from("orders")
-      .update({ status: "approved", assigned_rider: rider.id })
-      .eq("id", orderUserId)
-      .select()
-      .single();
-
-    if (error || !order) return ctx.answerCbQuery("❌ Error approving order");
-
-    if (order.telegram_id) {
-      await ctx.telegram.sendMessage(
-        order.telegram_id,
-        `✅ Your order has been approved! Rider ${ctx.from?.first_name} is on the way 🚴‍♂️`
-      );
-    }
-
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `🚴‍♂️ Rider *${ctx.from?.first_name}* approved order of ${order.user_name}`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    await ctx.answerCbQuery("Order approved!");
-    await ctx.editMessageReplyMarkup(undefined);
-  });
-
-  bot.action(/rider_order_reject_(\d+)/, async (ctx) => {
-    const orderUserId = ctx.match[1];
-
-    const { data: order, error } = await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", orderUserId)
-      .select()
-      .single();
-
-    if (error || !order) return ctx.answerCbQuery("❌ Error rejecting order");
-
-    for (const adminId of ADMIN_IDS) {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `❌ Rider *${ctx.from?.first_name}* rejected order of ${order.user_name}`,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    await ctx.answerCbQuery("Order rejected");
-    await ctx.editMessageReplyMarkup(undefined);
   });
 }

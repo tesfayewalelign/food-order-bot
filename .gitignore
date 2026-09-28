@@ -27,6 +27,7 @@ Thumbs.db
 # Optional: database files (if local SQLite)
 *.sqlite
 *.sqlite3
+*.db
 
 # Optional: temporary files
 tmp/

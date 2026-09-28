@@ -1,10 +1,10 @@
 import { Markup } from "telegraf";
 
 export const campusMenu = Markup.inlineKeyboard([
-  [Markup.button.callback("Main Boys Dorm", "campus_main_boys")],
-  [Markup.button.callback("Main Female Dorm", "campus_main_female")],
-  [Markup.button.callback("Techno Boys Dorm", "campus_techno_boys")],
-  [Markup.button.callback("Techno Female Dorm", "campus_techno_female")],
+  [Markup.button.callback("Main Boys", "campus_main_boys")],
+  [Markup.button.callback("Main Female", "campus_main_female")],
+  [Markup.button.callback("Techno Boys Diaspora", "campus_techno_boys")],
+  [Markup.button.callback("Techno Female", "campus_techno_female")],
 ]);
 
 export const restaurantMenu = Markup.inlineKeyboard([
