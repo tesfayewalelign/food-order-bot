@@ -26,6 +26,7 @@ export async function initDb() {
     `CREATE TABLE IF NOT EXISTS restaurants (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
+      active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`,
 
@@ -34,6 +35,7 @@ export async function initDb() {
       restaurant_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       price REAL NOT NULL,
+      active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE
     );`,
@@ -117,9 +119,14 @@ export async function initDb() {
       user_name TEXT NOT NULL,
       user_phone TEXT NOT NULL,
       message TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
   ]);
+
+  try { await db.execute("ALTER TABLE restaurants ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
+  try { await db.execute("ALTER TABLE foods ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
+  try { await db.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
 
   // Seed sample restaurants if empty
   const restCheck = await db.execute("SELECT COUNT(*) as count FROM restaurants");

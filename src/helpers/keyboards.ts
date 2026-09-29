@@ -1,19 +1,31 @@
 import { Markup } from "telegraf";
 import { db } from "../config/db.js";
 
-export function getMainMenuKeyboard(isAdmin: boolean, isDriver: boolean) {
-  if (isDriver) {
-    return Markup.keyboard([
-      ["📦 My Deliveries"],
-      ["📅 Schedule"],
-      ["🏠 Main Menu"],
-    ]).resize();
-  }
+export const customerMenuKeyboard = Markup.keyboard([
+  ["🍽️ Order Food", "📦 My Orders"],
+  ["⭐ Special Order", "❓ Help"],
+]).resize();
 
-  return Markup.keyboard([
-    ["🍽️ Order Food", "📦 My Orders"],
-    ["⭐ Special Order", "❓ Help"],
-  ]).resize();
+export const riderMenuKeyboard = Markup.keyboard([
+  ["📦 My Deliveries", "🛵 New Orders"],
+  ["📅 My Schedule", "👤 My Profile"],
+  ["🏠 Main Menu"],
+]).resize();
+
+export const adminReplyKeyboard = Markup.keyboard([
+  ["📊 Dashboard", "🍽 Restaurants", "🍔 Foods"],
+  ["🛵 Riders", "📋 Orders", "📥 Contract Requests"],
+  ["💬 Complaints", "⚙️ Settings", "🏠 Main Menu"],
+]).resize();
+
+export function getMainMenuKeyboard(roleOrIsAdmin: "admin" | "rider" | "customer" | boolean, isDriver?: boolean) {
+  if (roleOrIsAdmin === "admin" || roleOrIsAdmin === true) {
+    return adminReplyKeyboard;
+  }
+  if (roleOrIsAdmin === "rider" || isDriver === true) {
+    return riderMenuKeyboard;
+  }
+  return customerMenuKeyboard;
 }
 
 export function getHelpMenuKeyboard() {
@@ -22,12 +34,6 @@ export function getHelpMenuKeyboard() {
     ["💬 Complaint", "🏠 Main Menu"],
   ]).resize();
 }
-
-export const riderMenuKeyboard = Markup.keyboard([
-  ["📦 My Deliveries"],
-  ["📅 Schedule"],
-  ["🏠 Main Menu"],
-]).resize();
 
 export const campusKeyboard = Markup.inlineKeyboard([
   [
@@ -94,7 +100,7 @@ export const confirmKeyboard = Markup.inlineKeyboard([
 
 export async function getRestaurantKeyboard() {
   try {
-    const result = await db.execute("SELECT id, name FROM restaurants ORDER BY name ASC");
+    const result = await db.execute("SELECT id, name FROM restaurants WHERE (active IS NULL OR active = 1) ORDER BY name ASC");
     const restaurants = result.rows;
 
     const buttons: any[] = [];
@@ -128,10 +134,10 @@ export async function getRestaurantKeyboard() {
 
 export async function getFoodKeyboard(restaurantId?: string | number) {
   try {
-    let sql = "SELECT id, name, price FROM foods ORDER BY name ASC";
+    let sql = "SELECT id, name, price FROM foods WHERE (active IS NULL OR active = 1) ORDER BY name ASC";
     let args: any[] = [];
     if (restaurantId) {
-      sql = "SELECT id, name, price FROM foods WHERE restaurant_id = ? ORDER BY name ASC";
+      sql = "SELECT id, name, price FROM foods WHERE restaurant_id = ? AND (active IS NULL OR active = 1) ORDER BY name ASC";
       args = [restaurantId];
     }
     const result = await db.execute({ sql, args });

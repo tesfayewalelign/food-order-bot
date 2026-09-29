@@ -1,20 +1,11 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { db } from "../../config/db.js";
-
-const ADMIN_IDS: number[] = (process.env.ADMIN_TELEGRAM_IDS || "")
-  .split(",")
-  .map((id) => Number(id))
-  .filter((id) => !isNaN(id));
-
-function isTextMessage(
-  ctx: Context
-): ctx is Context & { message: { text: string } } {
-  return (
-    !!ctx.message &&
-    "text" in ctx.message &&
-    typeof ctx.message.text === "string"
-  );
-}
+import { requireRider, getUserRole } from "../../helpers/roles.js";
+import {
+  riderMenuKeyboard,
+  customerMenuKeyboard,
+  adminReplyKeyboard,
+} from "../../helpers/keyboards.js";
 
 function normalizePhone(phone?: string): string {
   if (!phone) return "";
@@ -29,36 +20,178 @@ function normalizePhone(phone?: string): string {
   return cleaned;
 }
 
-export function setupDriverHandler(bot: Telegraf<Context>) {
-  bot.hears("📦 My Deliveries", handleMyDeliveries);
-  bot.hears("📅 Schedule", handleSchedule);
-  bot.hears("🏠 Main Menu", handleMainMenu);
+function formatPhoneLink(phone?: string): string {
+  if (!phone) return "N/A";
+  const norm = normalizePhone(phone);
+  return norm ? `[${phone}](tel:${norm})` : phone;
+}
 
-  bot.start(async (ctx) => {
+function formatCampusName(campus?: string): string {
+  if (!campus) return "N/A";
+  return campus
+    .replace(/^campus_/, "")
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export function setupDriverHandler(bot: Telegraf<Context>) {
+  // Hears handlers with role guards
+  bot.hears("📦 My Deliveries", async (ctx) => {
+    if (!(await requireRider(ctx))) return;
+    await handleMyDeliveries(ctx);
+  });
+
+  bot.hears("🛵 New Orders", async (ctx) => {
+    if (!(await requireRider(ctx))) return;
+    await handleNewOrders(ctx);
+  });
+
+  bot.hears("📅 My Schedule", async (ctx) => {
+    if (!(await requireRider(ctx))) return;
+    await handleSchedule(ctx);
+  });
+
+  bot.hears("📅 Schedule", async (ctx) => {
+    if (!(await requireRider(ctx))) return;
+    await handleSchedule(ctx);
+  });
+
+  bot.hears("👤 My Profile", async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!userId) return next();
+    const role = await getUserRole(userId);
+    if (role === "rider") {
+      return handleRiderProfile(ctx);
+    }
+    return next();
+  });
+
+  bot.hears("🏠 Main Menu", async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
+    const role = await getUserRole(userId);
+
+    if (role === "admin") {
+      return ctx.reply("🏠 *Admin Main Menu*", {
+        parse_mode: "Markdown",
+        ...adminReplyKeyboard,
+      });
+    }
+
+    if (role === "rider") {
+      return ctx.reply("🏠 *Rider Main Menu*", {
+        parse_mode: "Markdown",
+        ...riderMenuKeyboard,
+      });
+    }
+
+    return ctx.reply("🏠 *Main Menu*", {
+      parse_mode: "Markdown",
+      ...customerMenuKeyboard,
+    });
+  });
+
+  async function handleRiderProfile(ctx: Context) {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
 
     const res = await db.execute({
       sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
-      args: [userId],
+      args: [telegramId],
     });
     const rider = res.rows[0];
 
-    if (rider) {
-      return ctx.reply(
-        `🚗 Welcome back, ${rider.name}!\nChoose an option:`,
-        Markup.keyboard([
-          ["📦 My Deliveries"],
-          ["📅 Schedule"],
-          ["🏠 Main Menu"],
-        ]).resize()
-      );
-    } else {
-      return ctx.reply(
-        "🛵 Welcome Rider!\nPlease activate your account with the code sent by admin:\n/activate <4-digit-code>"
-      );
+    if (!rider) {
+      return ctx.reply("⚠️ You do not have an active rider profile.");
     }
-  });
+
+    const profileMsg =
+      `👤 *Rider Profile*\n\n` +
+      `🛵 *Name:* ${rider.name}\n` +
+      `📞 *Phone:* ${formatPhoneLink(String(rider.phone))}\n` +
+      `🏫 *Assigned Campus:* ${formatCampusName(String(rider.campus))}\n` +
+      `🟢 *Status:* Active Rider`;
+
+    return ctx.reply(profileMsg, { parse_mode: "Markdown" });
+  }
+
+  async function handleSchedule(ctx: Context) {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const res = await db.execute({
+      sql: "SELECT name, campus FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = res.rows[0];
+
+    const campusLabel = rider ? formatCampusName(String(rider.campus)) : "Assigned Campus";
+
+    return ctx.reply(
+      `📅 *My Schedule*\n\n` +
+        `🕘 *Hours:* 9:00 AM – 9:00 PM\n` +
+        `🏫 *Assigned Zone:* ${campusLabel}\n` +
+        `⚡ *Shift Status:* Active`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  async function handleNewOrders(ctx: Context) {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const riderRes = await db.execute({
+      sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = riderRes.rows[0];
+
+    if (!rider) {
+      return ctx.reply("⚠️ You are not activated.");
+    }
+
+    const pendingOrdersRes = await db.execute({
+      sql: "SELECT * FROM orders WHERE status = 'pending' ORDER BY id DESC LIMIT 10",
+      args: [],
+    });
+    const pendingOrders = pendingOrdersRes.rows;
+
+    if (pendingOrders.length === 0) {
+      return ctx.reply("🛵 *No new pending orders at this time.*", { parse_mode: "Markdown" });
+    }
+
+    for (const o of pendingOrders) {
+      const telLink = formatPhoneLink(String(o.phone));
+      const formattedItems = String(o.foods_summary || "")
+        .split(",")
+        .map((i) => `* ${i.trim()}`)
+        .join("\n");
+
+      const msgText =
+        `🛵 *New Delivery*\n\n` +
+        `👤 *Customer:* ${o.user_name}\n` +
+        `📞 *Phone:* ${telLink}\n` +
+        `🏫 *Campus:* ${formatCampusName(String(o.campus))}\n` +
+        `🍴 *Restaurant:* ${o.restaurant}\n\n` +
+        `🍱 *Order:*\n${formattedItems}\n\n` +
+        `🍽️ *Food Contract:* ${o.has_restaurant_contract ? "Yes" : "No"}\n` +
+        `🚚 *Delivery Contract:* ${o.has_delivery_contract ? "Yes" : "No"}\n\n` +
+        `💰 *Total:* ${o.total_price} ETB`;
+
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Accept Order", `accept_order_${o.id}`),
+          Markup.button.callback("❌ Reject", `reject_order_${o.id}`),
+        ],
+      ]);
+
+      await ctx.reply(msgText, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  }
 
   async function handleMyDeliveries(ctx: Context) {
     const telegramId = ctx.from?.id;
@@ -75,7 +208,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     }
 
     const ordersRes = await db.execute({
-      sql: "SELECT id, user_name, phone, total_price, created_at FROM orders WHERE rider_id = ? ORDER BY id DESC LIMIT 20",
+      sql: "SELECT * FROM orders WHERE rider_id = ? ORDER BY id DESC LIMIT 20",
       args: [Number(rider.id)],
     });
     const orders = ordersRes.rows;
@@ -84,37 +217,99 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       return ctx.reply("📦 No deliveries assigned to you yet.");
     }
 
-    let message = `📦 *Your Deliveries*\n\n`;
-    orders.forEach((o: any, i: number) => {
-      const normPhone = normalizePhone(String(o.phone));
-      const telLink = normPhone ? `[${o.phone}](tel:${normPhone})` : o.phone;
-      message += `${i + 1}. *Order #${o.id}* — ${o.user_name} (📞 ${telLink})\nTotal: ${o.total_price} ETB\n\n`;
+    // Split orders into Today vs Previous
+    const todayStr = new Date().toISOString().split("T")[0];
+    const todayOrders: any[] = [];
+    const previousOrders: any[] = [];
+
+    orders.forEach((o: any) => {
+      const orderDateStr = o.created_at ? new Date(o.created_at).toISOString().split("T")[0] : "";
+      if (orderDateStr === todayStr) {
+        todayOrders.push(o);
+      } else {
+        previousOrders.push(o);
+      }
     });
 
-    return ctx.reply(message, { parse_mode: "Markdown" });
-  }
+    let message = `📦 *My Deliveries*\n\n`;
 
-  async function handleSchedule(ctx: Context) {
-    return ctx.reply(
-      "📅 *Your Schedule*\n\n🕘 9:00 AM – 9:00 PM\n📍 Campus Area",
-      { parse_mode: "Markdown" }
+    if (todayOrders.length > 0) {
+      message += `### *Today*\n\n`;
+      todayOrders.forEach((o: any) => {
+        const icon =
+          o.status === "delivered"
+            ? "🟢"
+            : o.status === "accepted" || o.status === "on_the_way" || o.status === "picked_up"
+            ? "🟡"
+            : "⚪";
+        message += `${icon} *Order #${o.id}*\n`;
+        message += `Customer: ${o.user_name}\n`;
+        message += `Campus: ${formatCampusName(String(o.campus))}\n`;
+        message += `Status: *${formatStatusLabel(o.status)}*\n\n`;
+      });
+    }
+
+    if (previousOrders.length > 0) {
+      message += `### *Previous*\n\n`;
+      previousOrders.forEach((o: any) => {
+        const icon = o.status === "delivered" ? "🟢" : "⚪";
+        message += `${icon} *Order #${o.id}* — ${o.user_name} (${formatCampusName(String(o.campus))}) | Status: ${formatStatusLabel(o.status)}\n`;
+      });
+    }
+
+    await ctx.reply(message, { parse_mode: "Markdown" });
+
+    // For active orders, offer status control buttons
+    const activeOrders = orders.filter(
+      (o: any) => o.status === "accepted" || o.status === "on_the_way" || o.status === "picked_up"
     );
+
+    for (const o of activeOrders) {
+      let actionBtn;
+      if (o.status === "accepted") {
+        actionBtn = Markup.button.callback("🚶 On the Way", `status_ontheway_${o.id}`);
+      } else if (o.status === "on_the_way") {
+        actionBtn = Markup.button.callback("📦 Picked Up", `status_pickedup_${o.id}`);
+      } else if (o.status === "picked_up") {
+        actionBtn = Markup.button.callback("✅ Delivered", `status_delivered_${o.id}`);
+      }
+
+      if (actionBtn) {
+        await ctx.reply(
+          `🛵 *Update Order #${o.id}* (${o.user_name} - ${formatStatusLabel(String(o.status || ""))}):`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: Markup.inlineKeyboard([[actionBtn]]).reply_markup,
+          }
+        );
+      }
+    }
   }
 
-  async function handleMainMenu(ctx: Context) {
-    return ctx.reply(
-      "🏠 Main Menu",
-      Markup.keyboard([
-        ["📦 My Deliveries"],
-        ["📅 Schedule"],
-        ["🏠 Main Menu"],
-      ]).resize()
-    );
+  function formatStatusLabel(status?: string): string {
+    switch (status) {
+      case "pending":
+        return "⏳ Pending";
+      case "accepted":
+        return "🚴 Accepted";
+      case "on_the_way":
+        return "🚶 On the Way";
+      case "picked_up":
+        return "📦 Picked Up";
+      case "delivered":
+        return "✅ Delivered";
+      case "cancelled":
+        return "❌ Cancelled";
+      default:
+        return status || "Unknown";
+    }
   }
 
-  // Accept Order Callback with Race Condition Guard
+  // Accept Order Callback with Race Condition Guard (Requirement 5)
   bot.action(/^accept_order_(\d+)$/, async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
+    if (!(await requireRider(ctx))) return;
+
     const match = ctx.match;
     if (!match) return;
 
@@ -131,7 +326,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       return ctx.reply("⚠️ You are not an activated rider.");
     }
 
-    // Atomic UPDATE status='accepted' WHERE status='pending'
+    // Requirement 5: Atomic UPDATE status='accepted' WHERE status='pending'
     const updateRes = await db.execute({
       sql: "UPDATE orders SET status = 'accepted', rider_id = ?, rider_name = ? WHERE id = ? AND status = 'pending'",
       args: [Number(rider.id), String(rider.name), orderId],
@@ -139,7 +334,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
     if (updateRes.rowsAffected === 0) {
       return ctx.editMessageText(
-        `❌ *Order #${orderId} was already accepted by another rider.*`,
+        `❌ *This order has already been accepted by another rider.*`,
         { parse_mode: "Markdown" }
       );
     }
@@ -150,24 +345,33 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     });
     const order = orderRes.rows[0];
 
+    // Requirement 8: Customer notification on acceptance
     if (order && order.telegram_id) {
       try {
         await ctx.telegram.sendMessage(
           Number(order.telegram_id),
-          `🚴‍♂️ *Order Accepted!*\n\nRider *${rider.name}* has accepted your order #${orderId} and is on the way!`,
+          `🛵 *Your order has been accepted by a rider.*`,
           { parse_mode: "Markdown" }
         );
       } catch (e) {}
     }
 
+    const nextKb = Markup.inlineKeyboard([
+      [Markup.button.callback("🚶 On the Way", `status_ontheway_${orderId}`)],
+    ]);
+
     await ctx.editMessageText(
       `✅ *Order #${orderId} Accepted!*\n\nYou are assigned to deliver this order.`,
-      { parse_mode: "Markdown" }
+      {
+        parse_mode: "Markdown",
+        reply_markup: nextKb.reply_markup,
+      }
     );
   });
 
   bot.action(/^reject_order_(\d+)$/, async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
+    if (!(await requireRider(ctx))) return;
     const match = ctx.match;
     if (!match) return;
 
@@ -177,34 +381,160 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
     });
   });
 
-  bot.command("activate", async (ctx) => {
-    if (!isTextMessage(ctx) || !ctx.from?.id) return;
+  // Delivery Lifecycle Status Transitions (Requirement 8)
+  // Transition: accepted -> on_the_way
+  bot.action(/^status_ontheway_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireRider(ctx))) return;
 
-    const match = ctx.message.text.trim().match(/^\/activate\s+(\d{4})$/);
-    if (!match) return ctx.reply("⚠️ Please use: /activate <4-digit-code>");
-
-    const code = match[1];
+    const orderId = Number(ctx.match[1]);
+    const telegramId = ctx.from!.id;
 
     const riderRes = await db.execute({
-      sql: "SELECT * FROM riders WHERE secret_code = ?",
-      args: [String(code || "")],
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
     });
     const rider = riderRes.rows[0];
 
-    if (!rider) return ctx.reply("❌ Invalid secret code.");
+    if (!rider) return ctx.reply("⚠️ Unauthorized.");
 
-    await db.execute({
-      sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
-      args: [ctx.from.id, Number(rider.id)],
+    // Validate ownership & valid transition from 'accepted'
+    const updateRes = await db.execute({
+      sql: "UPDATE orders SET status = 'on_the_way' WHERE id = ? AND rider_id = ? AND status = 'accepted'",
+      args: [orderId, Number(rider.id)],
     });
 
-    ctx.reply(
-      `✅ Rider activated! Welcome ${rider.name}!\nChoose an option:`,
-      Markup.keyboard([
-        ["📦 My Deliveries"],
-        ["📅 Schedule"],
-        ["🏠 Main Menu"],
-      ]).resize()
+    if (updateRes.rowsAffected === 0) {
+      return ctx.reply("⚠️ Cannot update status. Order must be accepted by you first.");
+    }
+
+    const orderRes = await db.execute({
+      sql: "SELECT telegram_id FROM orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+
+    if (order && order.telegram_id) {
+      try {
+        await ctx.telegram.sendMessage(
+          Number(order.telegram_id),
+          `🚶 *Your order is on the way.*`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    }
+
+    const nextKb = Markup.inlineKeyboard([
+      [Markup.button.callback("📦 Picked Up", `status_pickedup_${orderId}`)],
+    ]);
+
+    await ctx.editMessageText(
+      `🚶 *Order #${orderId} is now marked as "On the Way".*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: nextKb.reply_markup,
+      }
+    );
+  });
+
+  // Transition: on_the_way -> picked_up
+  bot.action(/^status_pickedup_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireRider(ctx))) return;
+
+    const orderId = Number(ctx.match[1]);
+    const telegramId = ctx.from!.id;
+
+    const riderRes = await db.execute({
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = riderRes.rows[0];
+
+    if (!rider) return ctx.reply("⚠️ Unauthorized.");
+
+    const updateRes = await db.execute({
+      sql: "UPDATE orders SET status = 'picked_up' WHERE id = ? AND rider_id = ? AND status = 'on_the_way'",
+      args: [orderId, Number(rider.id)],
+    });
+
+    if (updateRes.rowsAffected === 0) {
+      return ctx.reply("⚠️ Cannot update status. Order status must be 'On the Way'.");
+    }
+
+    const orderRes = await db.execute({
+      sql: "SELECT telegram_id FROM orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+
+    if (order && order.telegram_id) {
+      try {
+        await ctx.telegram.sendMessage(
+          Number(order.telegram_id),
+          `📦 *Your food has been picked up.*`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    }
+
+    const nextKb = Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Delivered", `status_delivered_${orderId}`)],
+    ]);
+
+    await ctx.editMessageText(
+      `📦 *Order #${orderId} is now marked as "Picked Up".*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: nextKb.reply_markup,
+      }
+    );
+  });
+
+  // Transition: picked_up -> delivered
+  bot.action(/^status_delivered_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireRider(ctx))) return;
+
+    const orderId = Number(ctx.match[1]);
+    const telegramId = ctx.from!.id;
+
+    const riderRes = await db.execute({
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [telegramId],
+    });
+    const rider = riderRes.rows[0];
+
+    if (!rider) return ctx.reply("⚠️ Unauthorized.");
+
+    const updateRes = await db.execute({
+      sql: "UPDATE orders SET status = 'delivered' WHERE id = ? AND rider_id = ? AND status = 'picked_up'",
+      args: [orderId, Number(rider.id)],
+    });
+
+    if (updateRes.rowsAffected === 0) {
+      return ctx.reply("⚠️ Cannot update status. Order status must be 'Picked Up'.");
+    }
+
+    const orderRes = await db.execute({
+      sql: "SELECT telegram_id FROM orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+
+    if (order && order.telegram_id) {
+      try {
+        await ctx.telegram.sendMessage(
+          Number(order.telegram_id),
+          `✅ *Your order has been delivered.*`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    }
+
+    await ctx.editMessageText(
+      `✅ *Order #${orderId} is now marked as "Delivered"!*`,
+      { parse_mode: "Markdown" }
     );
   });
 }

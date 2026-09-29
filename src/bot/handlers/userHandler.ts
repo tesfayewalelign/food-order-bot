@@ -3,6 +3,9 @@ import { db } from "../../config/db.js";
 import { userState, resetUserState, UserState } from "../../helpers/state.js";
 import {
   getMainMenuKeyboard,
+  customerMenuKeyboard,
+  riderMenuKeyboard,
+  adminReplyKeyboard,
   getHelpMenuKeyboard,
   campusKeyboard,
   getRestaurantKeyboard,
@@ -15,6 +18,7 @@ import {
 } from "../../helpers/keyboards.js";
 import { COMPANY_CONTACT } from "../../config/company.js";
 import { checkRestaurantContract, checkDeliveryContract } from "../../helpers/contracts.js";
+import { getUserRole } from "../../helpers/roles.js";
 
 function isTextMessage(msg: any): msg is { text: string } {
   return msg && typeof msg.text === "string";
@@ -40,6 +44,12 @@ function normalizePhone(phone?: string): string {
   return cleaned;
 }
 
+function formatPhoneLink(phone?: string): string {
+  if (!phone) return "N/A";
+  const norm = normalizePhone(phone);
+  return norm ? `[${phone}](tel:${norm})` : phone;
+}
+
 function formatCampusName(campus?: string): string {
   if (!campus) return "N/A";
   return campus
@@ -58,11 +68,37 @@ export function handleUserFlow(
     try {
       const userId = ctx.from?.id;
       if (!userId) return;
-      if (ADMIN_IDS.includes(userId) || DRIVER_IDS.includes(userId)) return;
 
+      const role = await getUserRole(userId);
       const msg = ctx.message;
       if (!msg || !("text" in msg || "contact" in msg)) return;
       if ("text" in msg && msg.text.startsWith("/")) return;
+
+      // Handle role-specific main menu button
+      if ("text" in msg && msg.text === "🏠 Main Menu") {
+        resetUserState(userId);
+        if (role === "admin") {
+          return ctx.reply("🏠 *Admin Main Menu*", {
+            parse_mode: "Markdown",
+            ...adminReplyKeyboard,
+          });
+        }
+        if (role === "rider") {
+          return ctx.reply("🏠 *Rider Main Menu*", {
+            parse_mode: "Markdown",
+            ...riderMenuKeyboard,
+          });
+        }
+        return ctx.reply("🏠 *Main Menu*", {
+          parse_mode: "Markdown",
+          ...customerMenuKeyboard,
+        });
+      }
+
+      // If user is Admin or Rider and sending text non-ordering messages, let their respective handlers deal with it
+      if (role === "admin" || role === "rider") {
+        return;
+      }
 
       let state = userState.get(userId);
       if (!state) {
@@ -122,7 +158,7 @@ export function handleUserFlow(
             `🎉 Registration complete! You can now browse food, view past orders, or contact support using the buttons below.`,
           {
             parse_mode: "Markdown",
-            ...getMainMenuKeyboard(false, false),
+            ...customerMenuKeyboard,
           }
         );
       }
@@ -202,17 +238,18 @@ export function handleUserFlow(
           const userPhone = state.phone || "N/A";
 
           await db.execute({
-            sql: "INSERT INTO complaints (telegram_id, user_name, user_phone, message) VALUES (?, ?, ?, ?)",
+            sql: "INSERT INTO complaints (telegram_id, user_name, user_phone, message, status) VALUES (?, ?, ?, ?, 'pending')",
             args: [userId, userName, userPhone, complaintText],
           });
 
-          for (const adminId of ADMIN_IDS) {
+          const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map(id => Number(id.trim())).filter(id => !isNaN(id));
+          for (const adminId of adminIds) {
             try {
               await bot.telegram.sendMessage(
                 adminId,
                 `⚠️ *New Complaint Received*\n\n` +
                   `👤 *User:* ${userName} (${userId})\n` +
-                  `📞 *Phone:* ${userPhone}\n` +
+                  `📞 *Phone:* ${formatPhoneLink(userPhone)}\n` +
                   `💬 *Complaint:* ${complaintText}`,
                 { parse_mode: "Markdown" }
               );
@@ -223,13 +260,13 @@ export function handleUserFlow(
 
           return ctx.reply(
             "✅ Thank you! Your complaint has been submitted to the organization.",
-            getMainMenuKeyboard(false, false)
+            customerMenuKeyboard
           );
         } catch (err) {
           console.error("Complaint handling error:", err);
           return ctx.reply(
             "✅ Thank you! Your complaint has been submitted.",
-            getMainMenuKeyboard(false, false)
+            customerMenuKeyboard
           );
         }
       }
@@ -264,7 +301,7 @@ export function handleUserFlow(
                   `*${index + 1}. 🆔 Order #${o.id}*\n` +
                   `🏢 ${o.restaurant}\n` +
                   `💰 Total: ${o.total_price} ETB\n` +
-                  `📦 Status: ${o.status}\n` +
+                  `📦 Status: *${o.status}*\n` +
                   `🕒 ${o.created_at ? new Date(o.created_at).toLocaleString() : "Recent"}`
               )
               .join("\n\n");
@@ -303,7 +340,7 @@ export function handleUserFlow(
             return ctx.reply(
               `👤 *My Profile*\n\n` +
                 `👤 *Name:* ${name}\n` +
-                `📞 *Phone:* ${phone}\n` +
+                `📞 *Phone:* ${formatPhoneLink(phone)}\n` +
                 `🏫 *Campus:* ${formatCampusName(campus)}`,
               { parse_mode: "Markdown" }
             );
@@ -329,18 +366,10 @@ export function handleUserFlow(
               { parse_mode: "Markdown" }
             );
 
-          case "🏠 Main Menu":
-            resetUserState(userId);
-            state.step = "idle";
-            return ctx.reply(
-              "🏠 Main Menu:",
-              getMainMenuKeyboard(false, false)
-            );
-
           default:
             return ctx.reply(
               "🤔 Command not recognized. Use the buttons below or /start to restart.",
-              getMainMenuKeyboard(false, false)
+              customerMenuKeyboard
             );
         }
       }
@@ -545,13 +574,14 @@ export function handleUserFlow(
         ],
       });
 
-      for (const adminId of ADMIN_IDS) {
+      const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map(id => Number(id.trim())).filter(id => !isNaN(id));
+      for (const adminId of adminIds) {
         try {
           await bot.telegram.sendMessage(
             adminId,
             `📥 *New Food Contract Request*\n\n` +
               `👤 *Name:* ${state.name || "User"}\n` +
-              `📞 *Phone:* ${state.phone || "N/A"}\n` +
+              `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
               `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
               `🏢 *Restaurant:* ${state.restaurant || "N/A"}\n` +
               `🆔 *Telegram ID:* ${userId}`,
@@ -795,13 +825,14 @@ export function handleUserFlow(
         ],
       });
 
-      for (const adminId of ADMIN_IDS) {
+      const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map(id => Number(id.trim())).filter(id => !isNaN(id));
+      for (const adminId of adminIds) {
         try {
           await bot.telegram.sendMessage(
             adminId,
             `📥 *New Delivery Contract Request*\n\n` +
               `👤 *Name:* ${state.name || "User"}\n` +
-              `📞 *Phone:* ${state.phone || "N/A"}\n` +
+              `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
               `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
               `🆔 *Telegram ID:* ${userId}`,
             { parse_mode: "Markdown" }
@@ -836,7 +867,7 @@ export function handleUserFlow(
     const summaryText =
       `📋 *Order Summary*\n\n` +
       `👤 *Name:* ${state.name || "N/A"}\n` +
-      `📞 *Phone:* ${state.phone || "N/A"}\n` +
+      `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
       `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
       `🏢 *Restaurant:* ${state.restaurant || "N/A"}\n\n` +
       `🍱 *Food:* \n${foodItemsFormatted}\n\n` +
@@ -912,7 +943,7 @@ export function handleUserFlow(
 
       const orderId = Number(orderRes.rows[0]?.id);
 
-      // 2. Insert order items with price_at_order preservation
+      // 2. Insert order items with price_at_order preservation (Requirement 15)
       for (const item of state.foods) {
         await db.execute({
           sql: `INSERT INTO order_items (order_id, food_name, quantity, price_at_order)
@@ -921,12 +952,16 @@ export function handleUserFlow(
         });
       }
 
-      // 3. Decrement contract counters if active
+      // 3. Decrement contract counters if active safely (Requirement 20)
       if (state.hasRestaurantContract) {
         await db.execute({
           sql: `UPDATE restaurant_contracts
-                SET remaining_meals = MAX(0, remaining_meals - 1)
-                WHERE telegram_id = ? AND is_active = 1`,
+                SET remaining_meals = remaining_meals - 1
+                WHERE id = (
+                  SELECT id FROM restaurant_contracts
+                  WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0
+                  LIMIT 1
+                )`,
           args: [userId],
         });
       }
@@ -934,32 +969,37 @@ export function handleUserFlow(
       if (state.hasDeliveryContract) {
         await db.execute({
           sql: `UPDATE delivery_contracts
-                SET remaining_deliveries = MAX(0, remaining_deliveries - 1)
-                WHERE telegram_id = ? AND is_active = 1`,
+                SET remaining_deliveries = remaining_deliveries - 1
+                WHERE id = (
+                  SELECT id FROM delivery_contracts
+                  WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries > 0
+                  LIMIT 1
+                )`,
           args: [userId],
         });
       }
 
-      // 4. Notify active campus riders with clickable tel link
+      // 4. Notify active campus riders with clickable tel link (Requirement 6 & 7)
       const ridersRes = await db.execute({
         sql: "SELECT telegram_id, name, phone FROM riders WHERE active = 1 AND campus = ?",
         args: [String(state.campus || "")],
       });
 
-      const rawPhone = state.phone || "";
-      const normalizedPhone = normalizePhone(rawPhone);
-      const telLink = normalizedPhone ? `[${rawPhone}](tel:${normalizedPhone})` : rawPhone;
+      const telLink = formatPhoneLink(state.phone);
+      const itemsListFormatted = state.foods
+        .map((f) => `* ${f.name} × ${f.quantity}`)
+        .join("\n");
 
       const riderMsg =
-        `🛵 *NEW ORDER #${orderId}*\n\n` +
+        `🛵 *New Delivery*\n\n` +
         `👤 *Customer:* ${state.name || "User"}\n` +
         `📞 *Phone:* ${telLink}\n` +
         `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
-        `🏢 *Restaurant:* ${state.restaurant || "N/A"}\n` +
-        `🍱 *Items:* ${foodsSummary}\n\n` +
+        `🍴 *Restaurant:* ${state.restaurant || "N/A"}\n\n` +
+        `🍱 *Order:*\n${itemsListFormatted}\n\n` +
         `🍽️ *Food Contract:* ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
-        `🚚 *Delivery Contract:* ${state.hasDeliveryContract ? "Yes" : "No"}\n` +
-        `💵 *Grand Total:* ${grandTotal} ETB`;
+        `🚚 *Delivery Contract:* ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
+        `💰 *Total:* ${grandTotal} ETB`;
 
       const riderKeyboard = Markup.inlineKeyboard([
         [

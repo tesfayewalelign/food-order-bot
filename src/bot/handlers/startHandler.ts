@@ -6,8 +6,13 @@ import {
   userState,
   UserState,
 } from "../../helpers/state.js";
-import { getMainMenuKeyboard } from "../../helpers/keyboards.js";
-import { riderMenuKeyboard } from "../../helpers/keyboards.js";
+import {
+  getMainMenuKeyboard,
+  customerMenuKeyboard,
+  riderMenuKeyboard,
+  adminReplyKeyboard,
+} from "../../helpers/keyboards.js";
+import { getUserRole } from "../../helpers/roles.js";
 
 function isContactMessage(
   msg: any
@@ -21,39 +26,48 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!userId) return;
 
     try {
-      if (ADMIN_IDS.includes(userId)) {
+      resetUserState(userId);
+      const role = await getUserRole(userId);
+
+      if (role === "admin") {
         return ctx.reply(
-          `👋 Welcome Admin ${ctx.from?.first_name}!`,
-          getMainMenuKeyboard(true, false)
+          `🛡️ *Admin Control Center*\n\nWelcome back Admin, *${ctx.from?.first_name || "Admin"}*! Select an option below to manage the platform.`,
+          {
+            parse_mode: "Markdown",
+            ...adminReplyKeyboard,
+          }
         );
       }
 
-      resetUserState(userId);
+      if (role === "rider") {
+        const riderRes = await db.execute({
+          sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
+          args: [userId],
+        });
+        const rider = riderRes.rows[0];
 
-      // Check if user is a rider
-      const riderRes = await db.execute({
-        sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
-        args: [userId],
-      });
-      const rider = riderRes.rows[0];
-
-      if (rider) {
         userState.set(userId, {
           isRider: true,
-          campus: String(rider.campus),
+          campus: String(rider?.campus || ""),
           step: "idle",
           username: ctx.from?.username,
-          name: String(rider.name),
-          phone: String(rider.phone),
+          name: String(rider?.name || ctx.from?.first_name || "Rider"),
+          phone: String(rider?.phone || ""),
           foods: [],
           cartFoods: [],
           deliveryType: undefined,
         });
 
-        return ctx.reply(`🚴‍♂️ Welcome back ${rider.name}!`, riderMenuKeyboard);
+        return ctx.reply(
+          `🛵 *Rider Portal*\n\nWelcome back Rider, *${rider?.name || "Rider"}*! Manage your deliveries and schedule using the menu below.`,
+          {
+            parse_mode: "Markdown",
+            ...riderMenuKeyboard,
+          }
+        );
       }
 
-      // Check user profile
+      // Customer Flow
       const profRes = await db.execute({
         sql: "SELECT telegram_id, name, phone, campus FROM profiles WHERE telegram_id = ?",
         args: [userId],
@@ -83,7 +97,7 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         `👋 *Welcome back, ${profile.name}!*\n\nWhat would you like to do today?`,
         {
           parse_mode: "Markdown",
-          ...getMainMenuKeyboard(false, false),
+          ...customerMenuKeyboard,
         }
       );
     } catch (err) {
@@ -142,7 +156,7 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           `🎉 Registration complete! You can now browse food, view past orders, or contact support using the buttons below.`,
         {
           parse_mode: "Markdown",
-          ...getMainMenuKeyboard(false, false),
+          ...customerMenuKeyboard,
         }
       );
     }
@@ -161,13 +175,13 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     try {
       const riderRes = await db.execute({
-        sql: "SELECT * FROM riders WHERE secret_code = ?",
+        sql: "SELECT * FROM riders WHERE secret_code = ? AND active = 1",
         args: [String(code || "")],
       });
       const rider = riderRes.rows[0];
 
       if (!rider)
-        return ctx.reply("❌ Rider not found. Please check your code.");
+        return ctx.reply("❌ Rider not found or inactive. Please check your activation code with the admin.");
 
       await db.execute({
         sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
@@ -176,7 +190,7 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
       return ctx.reply(
         `✅ Activation successful! Welcome Rider ${rider.name} 🚴‍♂️`,
-        getMainMenuKeyboard(false, true)
+        riderMenuKeyboard
       );
     } catch (err) {
       console.error("Activation error:", err);
