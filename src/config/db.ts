@@ -121,12 +121,39 @@ export async function initDb() {
       message TEXT NOT NULL,
       status TEXT DEFAULT 'pending',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS delivery_pricing (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campus TEXT NOT NULL,
+      restaurant_id INTEGER,
+      price_per_food REAL NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE
     );`
   ]);
 
   try { await db.execute("ALTER TABLE restaurants ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
   try { await db.execute("ALTER TABLE foods ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
   try { await db.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
+  try { await db.execute("ALTER TABLE orders ADD COLUMN delivery_price_per_food REAL DEFAULT 0"); } catch(e) {}
+
+  // Seed default campus delivery prices if empty
+  const dpCheck = await db.execute("SELECT COUNT(*) as count FROM delivery_pricing");
+  const dpCount = Number(dpCheck.rows[0]?.count ?? 0);
+  if (dpCount === 0) {
+    await db.batch([
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_boys_whites_house", 10] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_boys_africa", 15] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_girls_white_house", 10] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_girls_africa_house", 15] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_techno_boys", 20] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_techno_girls", 25] },
+      { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_agri", 15] },
+    ]);
+  }
 
   // Seed sample restaurants if empty
   const restCheck = await db.execute("SELECT COUNT(*) as count FROM restaurants");

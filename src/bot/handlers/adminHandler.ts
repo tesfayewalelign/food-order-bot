@@ -13,6 +13,14 @@ import {
   hasActiveDeliveryContract,
 } from "../../helpers/contracts.js";
 import { COMPANY_CONTACT } from "../../config/company.js";
+import {
+  getApplicableDeliveryPrice,
+  setCampusDeliveryPrice,
+  setRestaurantDeliveryPrice,
+  getCampusDeliveryPrices,
+  getRestaurantDeliveryPrices,
+  deleteDeliveryPrice,
+} from "../../helpers/deliveryPricing.js";
 
 type AdminStateAction =
   | "add_restaurant"
@@ -20,6 +28,8 @@ type AdminStateAction =
   | "add_food"
   | "edit_food_price"
   | "add_rider"
+  | "set_campus_delivery_price"
+  | "set_restaurant_delivery_price"
   | "none";
 
 interface AdminState {
@@ -27,6 +37,7 @@ interface AdminState {
   restaurantId?: string | number | null;
   foodId?: string | number | null;
   riderId?: string | number | null;
+  campusKey?: string;
 }
 
 const adminStates = new Map<number, AdminState>();
@@ -53,15 +64,16 @@ function adminMainInlineKeyboard() {
 
 function formatPhoneLink(phone?: string): string {
   if (!phone) return "N/A";
-  let cleaned = phone.replace(/[^0-9+]/g, "");
-  if (cleaned.startsWith("09")) {
-    cleaned = "+2519" + cleaned.slice(2);
-  } else if (cleaned.startsWith("07")) {
-    cleaned = "+2517" + cleaned.slice(2);
-  } else if (cleaned.startsWith("251")) {
-    cleaned = "+" + cleaned;
-  }
-  return cleaned ? `[${phone}](tel:${cleaned})` : phone;
+  return phone.trim();
+}
+
+function formatCampusName(campus?: string): string {
+  if (!campus) return "N/A";
+  return campus
+    .replace(/^campus_/, "")
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
@@ -108,6 +120,11 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   bot.hears("💬 Complaints", async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     await showComplaintsMenu(ctx);
+  });
+
+  bot.hears("🚚 Delivery Pricing", async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    await showDeliveryPricingMenu(ctx);
   });
 
   bot.hears("⚙️ Settings", async (ctx) => {
@@ -222,11 +239,48 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           });
 
           await ctx.reply(
-            `✅ Rider *${name}* added!\n\n🔑 Activation Code: \`${secretCode}\`\n\nTell the rider to run in Telegram:\n\`/activate ${secretCode}\``,
+            `✅ Rider *${name}* added!\n\n` +
+              `🔑 Activation Code: \`${secretCode}\`\n\n` +
+              `Tell the rider to send in Telegram:\n` +
+              `\`/activate ${secretCode}\` or just send \`${secretCode}\``,
             { parse_mode: "Markdown" }
           );
           adminStates.delete(adminId);
           await showRidersMenu(ctx);
+          break;
+        }
+
+        case "set_campus_delivery_price": {
+          if (!state.campusKey) break;
+          const price = Number(text);
+          if (isNaN(price) || price < 0) {
+            return ctx.reply("⚠️ Please enter a valid non-negative number for price per food (e.g. 15).");
+          }
+
+          await setCampusDeliveryPrice(state.campusKey, price);
+          await ctx.reply(
+            `✅ Default delivery price for *${formatCampusName(state.campusKey)}* updated to *${price} ETB / food*!`,
+            { parse_mode: "Markdown" }
+          );
+          adminStates.delete(adminId);
+          await showCampusPricesMenu(ctx);
+          break;
+        }
+
+        case "set_restaurant_delivery_price": {
+          if (!state.restaurantId || !state.campusKey) break;
+          const price = Number(text);
+          if (isNaN(price) || price < 0) {
+            return ctx.reply("⚠️ Please enter a valid non-negative number for price per food (e.g. 15).");
+          }
+
+          await setRestaurantDeliveryPrice(Number(state.restaurantId), state.campusKey, price);
+          await ctx.reply(
+            `✅ Delivery price override updated to *${price} ETB / food*!`,
+            { parse_mode: "Markdown" }
+          );
+          adminStates.delete(adminId);
+          await showRestaurantPricesMenu(ctx);
           break;
         }
 
@@ -983,4 +1037,255 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       });
     }
   }
+
+  // --- DELIVERY PRICING MENU & ACTIONS ---
+  async function showDeliveryPricingMenu(ctx: Context) {
+    const text =
+      `🚚 *Delivery Pricing Management*\n\n` +
+      `Manage normal food order delivery prices per food quantity.\n\n` +
+      `🏫 *Campus Prices:* Configured default per-food delivery prices for each campus.\n` +
+      `🍽️ *Restaurant Prices:* Restaurant-specific per-food delivery price overrides for specific campuses.\n\n` +
+      `Please select a section to manage:`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback("🏫 Campus Prices", "admin_delivery_campus"),
+        Markup.button.callback("🍽️ Restaurant Prices", "admin_delivery_restaurant"),
+      ],
+      [Markup.button.callback("🔙 Back to Admin", "admin_back")],
+    ]);
+
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(text, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    } else {
+      await ctx.reply(text, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  }
+
+  async function showCampusPricesMenu(ctx: Context) {
+    const campusPrices = await getCampusDeliveryPrices();
+    const campusMap = new Map<string, number>();
+    campusPrices.forEach((cp) => campusMap.set(cp.campus, cp.pricePerFood));
+
+    const campusList = [
+      { key: "campus_main_boys_whites_house", label: "Main Boys Whites House" },
+      { key: "campus_main_boys_africa", label: "Main Boys Africa" },
+      { key: "campus_main_girls_white_house", label: "Main Girls White House" },
+      { key: "campus_main_girls_africa_house", label: "Main Girls Africa House" },
+      { key: "campus_techno_boys", label: "Techno Boys Diaspora" },
+      { key: "campus_techno_girls", label: "Techno Girls" },
+      { key: "campus_agri", label: "Agri Campus" },
+    ];
+
+    let msg = `🏫 *Campus Delivery Prices (Default)*\n\n`;
+    msg += `These are the default delivery prices charged *per food quantity* for each campus:\n\n`;
+
+    const buttons: any[] = [];
+
+    for (const c of campusList) {
+      const price = campusMap.get(c.key);
+      const priceText = price !== undefined ? `${price} ETB / food` : "Not Configured ⚠️";
+      msg += `• *${c.label}:* ${priceText}\n`;
+
+      buttons.push([
+        Markup.button.callback(
+          `✏️ Edit ${c.label} (${price !== undefined ? price + " ETB/food" : "Set"})`,
+          `set_campus_dp_${c.key}`
+        ),
+      ]);
+    }
+
+    buttons.push([Markup.button.callback("🔙 Back to Delivery Pricing", "admin_delivery_pricing")]);
+
+    const keyboard = Markup.inlineKeyboard(buttons);
+
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    } else {
+      await ctx.reply(msg, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  }
+
+  async function showRestaurantPricesMenu(ctx: Context) {
+    const restPrices = await getRestaurantDeliveryPrices();
+
+    let msg = `🍽️ *Restaurant Delivery Prices (Overrides)*\n\n`;
+    msg += `Configure restaurant-specific delivery prices per food for specific campuses. When set, these override the campus default price.\n\n`;
+
+    const buttons: any[] = [];
+
+    if (restPrices.length === 0) {
+      msg += `ℹ️ _No restaurant-specific price overrides currently configured. Campus default prices are being used for all restaurants._\n\n`;
+    } else {
+      msg += `*Current Restaurant Overrides:*\n`;
+      for (const item of restPrices) {
+        msg += `• *${item.restaurantName}* → ${formatCampusName(item.campus)}: *${item.pricePerFood} ETB / food*\n`;
+        buttons.push([
+          Markup.button.callback(
+            `🗑️ Remove ${item.restaurantName} (${formatCampusName(item.campus)})`,
+            `del_dp_${item.id}`
+          ),
+        ]);
+      }
+      msg += `\n`;
+    }
+
+    buttons.push([
+      Markup.button.callback("➕ Add / Edit Restaurant Override", "admin_add_restaurant_price"),
+    ]);
+    buttons.push([
+      Markup.button.callback("🔙 Back to Delivery Pricing", "admin_delivery_pricing"),
+    ]);
+
+    const keyboard = Markup.inlineKeyboard(buttons);
+
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    } else {
+      await ctx.reply(msg, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  }
+
+  bot.action("admin_delivery_pricing", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showDeliveryPricingMenu(ctx);
+  });
+
+  bot.action("admin_delivery_campus", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showCampusPricesMenu(ctx);
+  });
+
+  bot.action("admin_delivery_restaurant", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showRestaurantPricesMenu(ctx);
+  });
+
+  bot.action(/^set_campus_dp_(.+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    const campusKey = ctx.match[1];
+
+    adminStates.set(adminId, {
+      action: "set_campus_delivery_price",
+      campusKey,
+    });
+
+    await ctx.reply(
+      `✏️ Enter default normal delivery price (*ETB / food*) for *${formatCampusName(campusKey)}*:\n\n(e.g., enter \`15\`)`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action("admin_add_restaurant_price", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+
+    const restRes = await db.execute("SELECT id, name FROM restaurants WHERE (active IS NULL OR active = 1) ORDER BY name ASC");
+    const restaurants = restRes.rows;
+
+    if (restaurants.length === 0) {
+      return ctx.reply("⚠️ No active restaurants found. Please add a restaurant first.");
+    }
+
+    const buttons: any[] = [];
+    for (const r of restaurants) {
+      buttons.push([Markup.button.callback(String(r.name), `sel_rest_dp_${r.id}`)]);
+    }
+    buttons.push([Markup.button.callback("🔙 Back", "admin_delivery_restaurant")]);
+
+    await ctx.editMessageText("🍽️ *Select a Restaurant for Delivery Price Override:*", {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+    });
+  });
+
+  bot.action(/^sel_rest_dp_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+
+    const restaurantId = Number(ctx.match[1]);
+
+    const campusList = [
+      { key: "campus_main_boys_whites_house", label: "Main Boys Whites House" },
+      { key: "campus_main_boys_africa", label: "Main Boys Africa" },
+      { key: "campus_main_girls_white_house", label: "Main Girls White House" },
+      { key: "campus_main_girls_africa_house", label: "Main Girls Africa House" },
+      { key: "campus_techno_boys", label: "Techno Boys Diaspora" },
+      { key: "campus_techno_girls", label: "Techno Girls" },
+      { key: "campus_agri", label: "Agri Campus" },
+    ];
+
+    const buttons: any[] = [];
+    for (const c of campusList) {
+      buttons.push([
+        Markup.button.callback(`🏫 ${c.label}`, `sel_camp_dp_${restaurantId}_${c.key}`),
+      ]);
+    }
+    buttons.push([Markup.button.callback("🔙 Back", "admin_delivery_restaurant")]);
+
+    await ctx.editMessageText("🏫 *Select a Campus for this Restaurant Override:*", {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+    });
+  });
+
+  bot.action(/^sel_camp_dp_(\d+)_(.+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+
+    const adminId = ctx.from!.id;
+    const restaurantId = Number(ctx.match[1]);
+    const campusKey = ctx.match[2];
+
+    const restRes = await db.execute({
+      sql: "SELECT name FROM restaurants WHERE id = ?",
+      args: [restaurantId],
+    });
+    const restName = restRes.rows[0]?.name || "Restaurant";
+
+    adminStates.set(adminId, {
+      action: "set_restaurant_delivery_price",
+      restaurantId,
+      campusKey,
+    });
+
+    await ctx.reply(
+      `✏️ Enter delivery price (*ETB / food*) for *${restName}* at *${formatCampusName(campusKey)}*:\n\n(e.g., enter \`15\`)`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action(/^del_dp_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+
+    const id = Number(ctx.match[1]);
+    await deleteDeliveryPrice(id);
+
+    await ctx.reply("✅ Restaurant delivery price override removed.");
+    await showRestaurantPricesMenu(ctx);
+  });
 }

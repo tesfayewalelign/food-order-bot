@@ -20,10 +20,87 @@ function isContactMessage(
   return !!msg.contact && !!msg.contact.phone_number;
 }
 
+export async function activateRiderHelper(ctx: Context, code: string): Promise<boolean> {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+
+  const cleanCode = code.trim();
+  if (!cleanCode) return false;
+
+  try {
+    const riderRes = await db.execute({
+      sql: "SELECT * FROM riders WHERE secret_code = ? AND active = 1",
+      args: [cleanCode],
+    });
+    const rider = riderRes.rows[0];
+
+    if (!rider) return false;
+
+    await db.execute({
+      sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
+      args: [userId, Number(rider.id)],
+    });
+
+    userState.set(userId, {
+      isRider: true,
+      campus: String(rider.campus || ""),
+      step: "idle",
+      username: ctx.from?.username,
+      name: String(rider.name || ctx.from?.first_name || "Rider"),
+      phone: String(rider.phone || ""),
+      foods: [],
+      cartFoods: [],
+      deliveryType: undefined,
+    });
+
+    await ctx.reply(
+      `🎉 *Activation Successful!*\n\n` +
+        `Welcome Rider *${rider.name}*! 🛵\n` +
+        `• *Campus*: ${rider.campus}\n` +
+        `• *Phone*: ${rider.phone}\n\n` +
+        `You now have full rider access. Use the menu below to view orders and manage deliveries!`,
+      {
+        parse_mode: "Markdown",
+        ...riderMenuKeyboard,
+      }
+    );
+    return true;
+  } catch (err) {
+    console.error("Activation error:", err);
+    await ctx.reply("❌ Activation failed due to an internal error. Please try again.");
+    return true;
+  }
+}
+
 export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
+  // 1. /activate command handler (REGISTERED FIRST)
+  bot.command("activate", async (ctx) => {
+    const text = ctx.message?.text ?? "";
+    const parts = text.split(/\s+/);
+    const code = parts[1]?.trim();
+
+    if (!code) {
+      return ctx.reply("❗ Please send the code like this:\n/activate 8295");
+    }
+
+    const success = await activateRiderHelper(ctx, code);
+    if (!success) {
+      return ctx.reply("❌ Rider not found or inactive. Please check your activation code with the admin.");
+    }
+  });
+
+  // 2. /start command handler (handles payload if sent like /start 8295)
   bot.start(async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
+
+    // Check if start command has deep-link code parameter (e.g., /start 8295)
+    const text = ctx.message?.text ?? "";
+    const parts = text.split(/\s+/);
+    if (parts.length >= 2 && parts[1]) {
+      const activated = await activateRiderHelper(ctx, parts[1].trim());
+      if (activated) return;
+    }
 
     try {
       resetUserState(userId);
@@ -108,14 +185,29 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
   });
 
+  // 3. General message handler for registration steps or direct code entry
   bot.on("message", async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId) return next();
 
+    const msg: any = ctx.message;
+    if ("text" in msg && typeof msg.text === "string") {
+      const trimmed = msg.text.trim();
+
+      // Skip commands (let Telegraf command handlers process them)
+      if (trimmed.startsWith("/")) {
+        return next();
+      }
+
+      // Check if text is a standalone 4-digit code (e.g., 8295) for rider activation
+      if (/^\d{4}$/.test(trimmed)) {
+        const activated = await activateRiderHelper(ctx, trimmed);
+        if (activated) return;
+      }
+    }
+
     const state = userState.get(userId);
     if (!state) return next();
-
-    const msg: any = ctx.message;
 
     if (state.step === "profile_ask_name" && "text" in msg) {
       state.name = msg.text.trim();
@@ -163,38 +255,5 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     return next();
   });
-
-  bot.command("activate", async (ctx) => {
-    const text = ctx.message?.text ?? "";
-    const parts = text.split(" ");
-    if (parts.length < 2)
-      return ctx.reply("❗ Please send the code like this:\n/activate 4790");
-
-    const code = parts[1]?.trim();
-    if (!code) return ctx.reply("❗ Invalid code format.");
-
-    try {
-      const riderRes = await db.execute({
-        sql: "SELECT * FROM riders WHERE secret_code = ? AND active = 1",
-        args: [String(code || "")],
-      });
-      const rider = riderRes.rows[0];
-
-      if (!rider)
-        return ctx.reply("❌ Rider not found or inactive. Please check your activation code with the admin.");
-
-      await db.execute({
-        sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
-        args: [ctx.from!.id, Number(rider.id)],
-      });
-
-      return ctx.reply(
-        `✅ Activation successful! Welcome Rider ${rider.name} 🚴‍♂️`,
-        riderMenuKeyboard
-      );
-    } catch (err) {
-      console.error("Activation error:", err);
-      return ctx.reply("❌ Activation failed. Please try again.");
-    }
-  });
 }
+

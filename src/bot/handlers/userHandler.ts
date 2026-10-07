@@ -19,6 +19,7 @@ import {
 import { COMPANY_CONTACT } from "../../config/company.js";
 import { checkRestaurantContract, checkDeliveryContract } from "../../helpers/contracts.js";
 import { getUserRole } from "../../helpers/roles.js";
+import { getApplicableDeliveryPrice } from "../../helpers/deliveryPricing.js";
 
 function isTextMessage(msg: any): msg is { text: string } {
   return msg && typeof msg.text === "string";
@@ -44,10 +45,22 @@ function normalizePhone(phone?: string): string {
   return cleaned;
 }
 
+function escapeMarkdown(str?: string): string {
+  if (!str) return "";
+  return str.replace(/[_*`\[\]]/g, "\\$&");
+}
+
+function escapeHTML(str?: string): string {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function formatPhoneLink(phone?: string): string {
   if (!phone) return "N/A";
-  const norm = normalizePhone(phone);
-  return norm ? `[${phone}](tel:${norm})` : phone;
+  return phone.trim();
 }
 
 function formatCampusName(campus?: string): string {
@@ -857,7 +870,28 @@ export function handleUserFlow(
       ? 0
       : state.foods.reduce((acc, f) => acc + f.price * f.quantity, 0);
 
-    const deliveryFee = state.hasDeliveryContract ? 0 : totalItems * 10;
+    let deliveryFee = 0;
+    let deliveryPricePerFood = 0;
+    let deliveryFormatted = "";
+
+    if (state.hasDeliveryContract) {
+      deliveryFee = 0;
+      deliveryPricePerFood = 0;
+      deliveryFormatted = "Contract Delivery (0 ETB)";
+    } else {
+      const priceInfo = await getApplicableDeliveryPrice(state.campus, state.restaurantId);
+      if (!priceInfo) {
+        const msg = "⚠️ Normal delivery pricing has not been configured for your selected campus/restaurant. Please contact Admin or support.";
+        if (ctx.callbackQuery) {
+          return ctx.editMessageText(msg, { parse_mode: "Markdown" });
+        }
+        return ctx.reply(msg, { parse_mode: "Markdown" });
+      }
+      deliveryPricePerFood = priceInfo.pricePerFood;
+      deliveryFee = totalItems * deliveryPricePerFood;
+      deliveryFormatted = `${totalItems} food × ${deliveryPricePerFood} ETB\n= ${deliveryFee} ETB`;
+    }
+
     const grandTotal = foodSubtotal + deliveryFee;
 
     const foodItemsFormatted = state.foods
@@ -870,11 +904,9 @@ export function handleUserFlow(
       `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
       `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
       `🏢 *Restaurant:* ${state.restaurant || "N/A"}\n\n` +
-      `🍱 *Food:* \n${foodItemsFormatted}\n\n` +
-      `🍽️ *Restaurant Contract:* ${state.hasRestaurantContract ? "Yes (Food Prepaid)" : "No"}\n` +
-      `🚚 *Delivery Contract:* ${state.hasDeliveryContract ? "Yes (Free Delivery)" : "No"}\n\n` +
-      `💰 *Food Total:* ${foodSubtotal} ETB\n` +
-      `🚚 *Delivery Fee:* ${deliveryFee} ETB\n` +
+      `🍱 *Food Items:*\n${foodItemsFormatted}\n\n` +
+      `🍽️ *Food Total:* ${foodSubtotal} ETB\n\n` +
+      `🚚 *Delivery:*\n${deliveryFormatted}\n\n` +
       `💵 *Grand Total:* ${grandTotal} ETB\n\n` +
       `Please review and confirm your order:`;
 
@@ -912,7 +944,22 @@ export function handleUserFlow(
         ? 0
         : state.foods.reduce((acc, f) => acc + f.price * f.quantity, 0);
 
-      const deliveryFee = state.hasDeliveryContract ? 0 : totalItems * 10;
+      let deliveryFee = 0;
+      let deliveryPricePerFood = 0;
+
+      if (state.hasDeliveryContract) {
+        deliveryFee = 0;
+        deliveryPricePerFood = 0;
+      } else {
+        const priceInfo = await getApplicableDeliveryPrice(state.campus, state.restaurantId);
+        if (!priceInfo) {
+          state.isSubmittingOrder = false;
+          return ctx.reply("⚠️ Delivery pricing is not configured for this campus/restaurant. Order cannot be submitted.");
+        }
+        deliveryPricePerFood = priceInfo.pricePerFood;
+        deliveryFee = totalItems * deliveryPricePerFood;
+      }
+
       const grandTotal = foodSubtotal + deliveryFee;
 
       const foodsSummary = state.foods
@@ -921,8 +968,8 @@ export function handleUserFlow(
 
       // 1. Insert order record
       const orderRes = await db.execute({
-        sql: `INSERT INTO orders (telegram_id, user_name, phone, campus, restaurant, meal_type, restaurant_id, foods_summary, has_restaurant_contract, has_delivery_contract, food_total, delivery_fee, total_price, status)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        sql: `INSERT INTO orders (telegram_id, user_name, phone, campus, restaurant, meal_type, restaurant_id, foods_summary, has_restaurant_contract, has_delivery_contract, food_total, delivery_fee, total_price, delivery_price_per_food, status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
               RETURNING id;`,
         args: [
           userId,
@@ -938,6 +985,7 @@ export function handleUserFlow(
           foodSubtotal,
           deliveryFee,
           grandTotal,
+          deliveryPricePerFood,
         ],
       });
 
@@ -979,27 +1027,43 @@ export function handleUserFlow(
         });
       }
 
-      // 4. Notify active campus riders with clickable tel link (Requirement 6 & 7)
-      const ridersRes = await db.execute({
-        sql: "SELECT telegram_id, name, phone FROM riders WHERE active = 1 AND campus = ?",
-        args: [String(state.campus || "")],
+      // 4. Notify active campus riders with normalized matching & fallback (Requirement 6 & 7)
+      const allActiveRiders = await db.execute({
+        sql: "SELECT id, telegram_id, name, phone, campus FROM riders WHERE (active IS NULL OR active = 1 OR active = '1') AND telegram_id IS NOT NULL AND telegram_id != 0 AND telegram_id != '0'",
+        args: [],
       });
+
+      console.log(`🔍 Order #${orderId} - Found ${allActiveRiders.rows.length} total activated rider(s) in DB.`);
+
+      const normOrderCampus = (state.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      let targetRiders = allActiveRiders.rows.filter((r) => {
+        const rNorm = String(r.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        return rNorm === normOrderCampus || rNorm.includes(normOrderCampus) || normOrderCampus.includes(rNorm);
+      });
+
+      if (targetRiders.length === 0) {
+        console.log(`ℹ️ No rider matched campus '${state.campus}' specifically. Broadcasting to all ${allActiveRiders.rows.length} active riders.`);
+        targetRiders = allActiveRiders.rows;
+      } else {
+        console.log(`🎯 Matched ${targetRiders.length} rider(s) for campus '${state.campus}'.`);
+      }
 
       const telLink = formatPhoneLink(state.phone);
       const itemsListFormatted = state.foods
-        .map((f) => `* ${f.name} × ${f.quantity}`)
+        .map((f) => `• ${escapeHTML(f.name)} × ${f.quantity}`)
         .join("\n");
 
-      const riderMsg =
-        `🛵 *New Delivery*\n\n` +
-        `👤 *Customer:* ${state.name || "User"}\n` +
-        `📞 *Phone:* ${telLink}\n` +
-        `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
-        `🍴 *Restaurant:* ${state.restaurant || "N/A"}\n\n` +
-        `🍱 *Order:*\n${itemsListFormatted}\n\n` +
-        `🍽️ *Food Contract:* ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
-        `🚚 *Delivery Contract:* ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
-        `💰 *Total:* ${grandTotal} ETB`;
+      const riderMsgHTML =
+        `🛵 <b>New Order #${orderId}</b>\n\n` +
+        `👤 <b>Customer:</b> ${escapeHTML(state.name || "User")}\n` +
+        `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
+        `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(state.campus))}\n` +
+        `🍴 <b>Restaurant:</b> ${escapeHTML(state.restaurant || "N/A")}\n\n` +
+        `🍱 <b>Order Summary:</b>\n${itemsListFormatted}\n\n` +
+        `🍽️ <b>Food Contract:</b> ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
+        `🚚 <b>Delivery Contract:</b> ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
+        `💰 <b>Total Price:</b> ${grandTotal} ETB`;
 
       const riderKeyboard = Markup.inlineKeyboard([
         [
@@ -1008,14 +1072,28 @@ export function handleUserFlow(
         ],
       ]);
 
-      for (const r of ridersRes.rows) {
-        if (r.telegram_id) {
+      for (const r of targetRiders) {
+        const tid = Number(r.telegram_id);
+        if (tid && !isNaN(tid)) {
           try {
-            await bot.telegram.sendMessage(Number(r.telegram_id), riderMsg, {
-              parse_mode: "Markdown",
+            console.log(`📡 Sending order #${orderId} notification to rider ${r.name} (Telegram ID: ${tid})...`);
+            await bot.telegram.sendMessage(tid, riderMsgHTML, {
+              parse_mode: "HTML",
               reply_markup: riderKeyboard.reply_markup,
             });
-          } catch (e) {}
+            console.log(`✅ Successfully sent order #${orderId} notification to rider ${r.name} (${tid})!`);
+          } catch (e) {
+            console.error(`⚠️ Failed HTML notification to rider ${r.name} (${tid}), attempting plain text fallback:`, e);
+            try {
+              const plainMsg = riderMsgHTML.replace(/<[^>]+>/g, "");
+              await bot.telegram.sendMessage(tid, plainMsg, {
+                reply_markup: riderKeyboard.reply_markup,
+              });
+              console.log(`✅ Successfully sent fallback order #${orderId} notification to rider ${r.name} (${tid})!`);
+            } catch (err2) {
+              console.error(`❌ Failed plain text notification to rider ${r.name} (${tid}):`, err2);
+            }
+          }
         }
       }
 

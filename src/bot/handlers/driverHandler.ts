@@ -7,6 +7,27 @@ import {
   adminReplyKeyboard,
 } from "../../helpers/keyboards.js";
 
+function escapeMarkdown(str?: string): string {
+  if (!str) return "";
+  return str.replace(/[_*`\[\]]/g, "\\$&");
+}
+
+function escapeHTML(str?: string): string {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function normalizeCampusKey(campus?: string): string {
+  if (!campus) return "";
+  return String(campus)
+    .replace(/^campus_/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 function normalizePhone(phone?: string): string {
   if (!phone) return "";
   let cleaned = phone.replace(/[^0-9+]/g, "");
@@ -22,8 +43,7 @@ function normalizePhone(phone?: string): string {
 
 function formatPhoneLink(phone?: string): string {
   if (!phone) return "N/A";
-  const norm = normalizePhone(phone);
-  return norm ? `[${phone}](tel:${norm})` : phone;
+  return phone.trim();
 }
 
 function formatCampusName(campus?: string): string {
@@ -138,58 +158,87 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
   }
 
   async function handleNewOrders(ctx: Context) {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
+    try {
+      const telegramId = ctx.from?.id;
+      if (!telegramId) return;
 
-    const riderRes = await db.execute({
-      sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
-      args: [telegramId],
-    });
-    const rider = riderRes.rows[0];
-
-    if (!rider) {
-      return ctx.reply("⚠️ You are not activated.");
-    }
-
-    const pendingOrdersRes = await db.execute({
-      sql: "SELECT * FROM orders WHERE status = 'pending' ORDER BY id DESC LIMIT 10",
-      args: [],
-    });
-    const pendingOrders = pendingOrdersRes.rows;
-
-    if (pendingOrders.length === 0) {
-      return ctx.reply("🛵 *No new pending orders at this time.*", { parse_mode: "Markdown" });
-    }
-
-    for (const o of pendingOrders) {
-      const telLink = formatPhoneLink(String(o.phone));
-      const formattedItems = String(o.foods_summary || "")
-        .split(",")
-        .map((i) => `* ${i.trim()}`)
-        .join("\n");
-
-      const msgText =
-        `🛵 *New Delivery*\n\n` +
-        `👤 *Customer:* ${o.user_name}\n` +
-        `📞 *Phone:* ${telLink}\n` +
-        `🏫 *Campus:* ${formatCampusName(String(o.campus))}\n` +
-        `🍴 *Restaurant:* ${o.restaurant}\n\n` +
-        `🍱 *Order:*\n${formattedItems}\n\n` +
-        `🍽️ *Food Contract:* ${o.has_restaurant_contract ? "Yes" : "No"}\n` +
-        `🚚 *Delivery Contract:* ${o.has_delivery_contract ? "Yes" : "No"}\n\n` +
-        `💰 *Total:* ${o.total_price} ETB`;
-
-      const keyboard = Markup.inlineKeyboard([
-        [
-          Markup.button.callback("✅ Accept Order", `accept_order_${o.id}`),
-          Markup.button.callback("❌ Reject", `reject_order_${o.id}`),
-        ],
-      ]);
-
-      await ctx.reply(msgText, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard.reply_markup,
+      const riderRes = await db.execute({
+        sql: "SELECT * FROM riders WHERE telegram_id = ? AND active = 1",
+        args: [telegramId],
       });
+      const rider = riderRes.rows[0];
+
+      if (!rider) {
+        return ctx.reply("⚠️ You are not an activated rider.");
+      }
+
+      const pendingOrdersRes = await db.execute({
+        sql: "SELECT * FROM orders WHERE status = 'pending' ORDER BY id DESC LIMIT 20",
+        args: [],
+      });
+      const pendingOrders = pendingOrdersRes.rows;
+
+      if (pendingOrders.length === 0) {
+        return ctx.reply("🛵 <b>No new pending orders at this time.</b>", { parse_mode: "HTML" });
+      }
+
+      // Prioritize orders matching rider's campus
+      const riderNormCampus = normalizeCampusKey(String(rider.campus || ""));
+      let matchingOrders = pendingOrders.filter((o: any) => {
+        const orderNorm = normalizeCampusKey(String(o.campus || ""));
+        return (
+          riderNormCampus === orderNorm ||
+          riderNormCampus.includes(orderNorm) ||
+          orderNorm.includes(riderNormCampus)
+        );
+      });
+
+      // If no order matches rider's specific campus, display all pending orders so no orders are missed
+      if (matchingOrders.length === 0) {
+        matchingOrders = pendingOrders;
+      }
+
+      for (const o of matchingOrders) {
+        const telLink = formatPhoneLink(String(o.phone));
+        const formattedItems = String(o.foods_summary || "")
+          .split(",")
+          .map((i) => `• ${escapeHTML(i.trim())}`)
+          .join("\n");
+
+        const msgText =
+          `🛵 <b>New Order #${o.id}</b>\n\n` +
+          `👤 <b>Customer:</b> ${escapeHTML(String(o.user_name))}\n` +
+          `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
+          `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(String(o.campus)))}\n` +
+          `🍴 <b>Restaurant:</b> ${escapeHTML(String(o.restaurant))}\n\n` +
+          `🍱 <b>Order Summary:</b>\n${formattedItems}\n\n` +
+          `🍽️ <b>Food Contract:</b> ${o.has_restaurant_contract ? "Yes" : "No"}\n` +
+          `🚚 <b>Delivery Contract:</b> ${o.has_delivery_contract ? "Yes" : "No"}\n\n` +
+          `💰 <b>Total:</b> ${o.total_price} ETB`;
+
+        const keyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.callback("✅ Accept Order", `accept_order_${o.id}`),
+            Markup.button.callback("❌ Reject", `reject_order_${o.id}`),
+          ],
+        ]);
+
+        try {
+          await ctx.reply(msgText, {
+            parse_mode: "HTML",
+            reply_markup: keyboard.reply_markup,
+          });
+        } catch (sendErr) {
+          console.error(`⚠️ Failed sending HTML new order #${o.id} reply, falling back to plain text:`, sendErr);
+          const plain = msgText.replace(/<[^>]+>/g, "");
+          await ctx.reply(plain, {
+            reply_markup: keyboard.reply_markup,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("❌ Error in handleNewOrders:", err);
+      await ctx.reply("⚠️ An unexpected error occurred while loading new orders. Please try again.");
     }
   }
 

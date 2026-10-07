@@ -52,6 +52,34 @@ async function runTests() {
 
   console.log("✅ Test 1 Passed: Role Detection & Priority is correct!\n");
 
+  // Test 1B: Rider Secret Code Activation
+  console.log("--- Test 1B: Rider Secret Code Activation ---");
+  await db.execute({
+    sql: "INSERT OR REPLACE INTO riders (id, telegram_id, name, phone, campus, secret_code, active) VALUES (9005, NULL, 'Pending Rider', '0911999999', 'Main Boys Africa', '8295', 1)",
+    args: [],
+  });
+
+  const beforeActivationRole = await getUserRole(999005);
+  if (beforeActivationRole !== "customer") throw new Error("Expected customer role before activation");
+
+  // Activate via secret code 8295
+  const riderToActivate = (await db.execute({
+    sql: "SELECT * FROM riders WHERE secret_code = '8295' AND active = 1",
+    args: [],
+  })).rows[0];
+
+  if (!riderToActivate) throw new Error("Pending rider not found for code 8295");
+
+  await db.execute({
+    sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
+    args: [999005, Number(riderToActivate.id)],
+  });
+
+  const afterActivationRole = await getUserRole(999005);
+  if (afterActivationRole !== "rider") throw new Error("Expected rider role after activation with code 8295");
+
+  console.log("✅ Test 1B Passed: Rider Secret Code Activation (8295) working!\n");
+
   // Test 2: Active vs Inactive Restaurant and Food Filtering
   console.log("--- Test 2: Restaurant & Food Active Filtering ---");
   await db.execute("INSERT OR REPLACE INTO restaurants (id, name, active) VALUES (8000, 'Test Active Rest', 1)");
