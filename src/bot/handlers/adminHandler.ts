@@ -847,8 +847,8 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     });
   });
 
-  // Contract Approval (Requirement 18, 19, 20)
-  bot.action(/^admin_req_approve_(\d+)$/, async (ctx) => {
+  // Contract Approval & Rejection Direct Actions
+  bot.action(/^(?:admin_req_approve|approve_contract_req)_(\d+)$/, async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
     if (!(await requireAdmin(ctx))) return;
     const reqId = Number(ctx.match[1]);
@@ -859,18 +859,25 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     });
     const r = res.rows[0];
 
-    if (!r) return ctx.reply("⚠️ Request not found.");
+    if (!r) return ctx.reply("⚠️ Contract request not found.");
+    if (r.status === "approved") {
+      return ctx.editMessageText(`✅ *Contract Request #${reqId} was already approved.*`, { parse_mode: "Markdown" });
+    }
+    if (r.status === "rejected") {
+      return ctx.editMessageText(`❌ *Contract Request #${reqId} was already rejected.*`, { parse_mode: "Markdown" });
+    }
+
     const telegramId = Number(r.telegram_id);
 
     if (r.request_type === "food_contract") {
-      // Check duplicate active contract first (Requirement 18)
+      // Check duplicate active contract first
       const hasActive = await hasActiveRestaurantContract(telegramId, r.restaurant_id ? Number(r.restaurant_id) : null);
       if (hasActive) {
         await db.execute({
           sql: "UPDATE contract_requests SET status = 'already_active' WHERE id = ?",
           args: [reqId],
         });
-        return ctx.reply("ℹ️ Customer already has an active food contract for this restaurant.");
+        return ctx.editMessageText(`ℹ️ *Customer already has an active food contract for this restaurant.*`, { parse_mode: "Markdown" });
       }
 
       await db.execute({
@@ -887,19 +894,19 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       try {
         await bot.telegram.sendMessage(
           telegramId,
-          `✅ *Food Contract Approved!*\n\nYour food contract request for *${r.restaurant_name}* (${DEFAULT_MEAL_ALLOWANCE} meals) has been approved by admin!`,
+          `🎉 *Food Contract Approved!*\n\nYour food contract request for *${r.restaurant_name || "Restaurant"}* (${DEFAULT_MEAL_ALLOWANCE} meals) has been approved by admin!`,
           { parse_mode: "Markdown" }
         );
       } catch (e) {}
     } else {
-      // Check duplicate active contract first (Requirement 18)
+      // Check duplicate active contract first
       const hasActive = await hasActiveDeliveryContract(telegramId);
       if (hasActive) {
         await db.execute({
           sql: "UPDATE contract_requests SET status = 'already_active' WHERE id = ?",
           args: [reqId],
         });
-        return ctx.reply("ℹ️ Customer already has an active delivery contract.");
+        return ctx.editMessageText(`ℹ️ *Customer already has an active delivery contract.*`, { parse_mode: "Markdown" });
       }
 
       await db.execute({
@@ -911,7 +918,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       try {
         await bot.telegram.sendMessage(
           telegramId,
-          `✅ *Delivery Contract Approved!*\n\nYour delivery contract request (${DEFAULT_DELIVERY_ALLOWANCE} deliveries) has been approved by admin!`,
+          `🎉 *Delivery Contract Approved!*\n\nYour delivery contract request (${DEFAULT_DELIVERY_ALLOWANCE} deliveries) has been approved by admin!`,
           { parse_mode: "Markdown" }
         );
       } catch (e) {}
@@ -922,19 +929,35 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       args: [reqId],
     });
 
-    await ctx.editMessageText(`✅ Request #${reqId} approved and contract activated!`);
+    await ctx.editMessageText(`✅ *Contract Request #${reqId} Approved and Activated!*`, { parse_mode: "Markdown" });
   });
 
-  bot.action(/^admin_req_reject_(\d+)$/, async (ctx) => {
+  bot.action(/^(?:admin_req_reject|reject_contract_req)_(\d+)$/, async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
     if (!(await requireAdmin(ctx))) return;
     const reqId = Number(ctx.match[1]);
+
+    const res = await db.execute({
+      sql: "SELECT * FROM contract_requests WHERE id = ?",
+      args: [reqId],
+    });
+    const r = res.rows[0];
+
+    if (r && r.telegram_id) {
+      try {
+        await bot.telegram.sendMessage(
+          Number(r.telegram_id),
+          `❌ *Contract Request Declined*\n\nYour contract request was declined by admin. Please contact support if you have any questions.`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {}
+    }
 
     await db.execute({
       sql: "UPDATE contract_requests SET status = 'rejected' WHERE id = ?",
       args: [reqId],
     });
-    await ctx.editMessageText(`❌ Request #${reqId} marked as rejected.`);
+    await ctx.editMessageText(`❌ *Contract Request #${reqId} Rejected.*`, { parse_mode: "Markdown" });
   });
 
   // --- COMPLAINTS MANAGEMENT ---

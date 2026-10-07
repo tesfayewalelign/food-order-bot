@@ -22,6 +22,9 @@ async function runDeliveryPricingTests() {
     }
   }
 
+  // Clean up any old restaurant overrides for clean test isolation
+  await db.execute("DELETE FROM delivery_pricing WHERE restaurant_id IS NOT NULL");
+
   // Set up test campus default prices
   await setCampusDeliveryPrice("campus_techno_boys", 20);
   await setCampusDeliveryPrice("campus_main_boys_africa", 15);

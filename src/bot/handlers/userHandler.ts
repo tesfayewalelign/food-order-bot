@@ -574,12 +574,16 @@ export function handleUserFlow(
     if (!state) return;
 
     try {
-      await db.execute({
-        sql: `INSERT INTO contract_requests (telegram_id, user_name, phone, campus, request_type, restaurant_id, restaurant_name, status)
-              VALUES (?, ?, ?, ?, 'food_contract', ?, ?, 'pending')`,
+      const usernameTag = ctx.from?.username ? `@${ctx.from.username}` : "N/A";
+
+      const insertRes = await db.execute({
+        sql: `INSERT INTO contract_requests (telegram_id, user_name, username, phone, campus, request_type, restaurant_id, restaurant_name, status)
+              VALUES (?, ?, ?, ?, ?, 'food_contract', ?, ?, 'pending')
+              RETURNING id`,
         args: [
           userId,
           state.name || ctx.from?.first_name || "User",
+          usernameTag,
           state.phone || "",
           state.campus || "",
           state.restaurantId ? Number(state.restaurantId) : null,
@@ -587,19 +591,31 @@ export function handleUserFlow(
         ],
       });
 
+      const reqId = Number(insertRes.rows[0]?.id);
+
+      const adminMsgText =
+        `📥 *New Food Contract Request*\n\n` +
+        `👤 *Name:* ${escapeMarkdown(state.name || "User")}\n` +
+        `📞 *Phone:* ${escapeMarkdown(formatPhoneLink(state.phone))}\n` +
+        `🏫 *Campus:* ${escapeMarkdown(formatCampusName(state.campus))}\n` +
+        `🏢 *Restaurant:* ${escapeMarkdown(state.restaurant || "N/A")}\n` +
+        `🆔 *Telegram ID:* \`${userId}\`\n` +
+        `👤 *Username:* ${escapeMarkdown(usernameTag)}`;
+
+      const adminKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Confirm / Approve", `admin_req_approve_${reqId}`),
+          Markup.button.callback("❌ Cancel / Reject", `admin_req_reject_${reqId}`),
+        ],
+      ]);
+
       const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map(id => Number(id.trim())).filter(id => !isNaN(id));
       for (const adminId of adminIds) {
         try {
-          await bot.telegram.sendMessage(
-            adminId,
-            `📥 *New Food Contract Request*\n\n` +
-              `👤 *Name:* ${state.name || "User"}\n` +
-              `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
-              `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
-              `🏢 *Restaurant:* ${state.restaurant || "N/A"}\n` +
-              `🆔 *Telegram ID:* ${userId}`,
-            { parse_mode: "Markdown" }
-          );
+          await bot.telegram.sendMessage(adminId, adminMsgText, {
+            parse_mode: "Markdown",
+            reply_markup: adminKeyboard.reply_markup,
+          });
         } catch (e) {}
       }
 
@@ -827,29 +843,45 @@ export function handleUserFlow(
     if (!state) return;
 
     try {
-      await db.execute({
-        sql: `INSERT INTO contract_requests (telegram_id, user_name, phone, campus, request_type, status)
-              VALUES (?, ?, ?, ?, 'delivery_contract', 'pending')`,
+      const usernameTag = ctx.from?.username ? `@${ctx.from.username}` : "N/A";
+
+      const insertRes = await db.execute({
+        sql: `INSERT INTO contract_requests (telegram_id, user_name, username, phone, campus, request_type, status)
+              VALUES (?, ?, ?, ?, ?, 'delivery_contract', 'pending')
+              RETURNING id`,
         args: [
           userId,
           state.name || ctx.from?.first_name || "User",
+          usernameTag,
           state.phone || "",
           state.campus || "",
         ],
       });
 
+      const reqId = Number(insertRes.rows[0]?.id);
+
+      const adminMsgText =
+        `📥 *New Delivery Contract Request*\n\n` +
+        `👤 *Name:* ${escapeMarkdown(state.name || "User")}\n` +
+        `📞 *Phone:* ${escapeMarkdown(formatPhoneLink(state.phone))}\n` +
+        `🏫 *Campus:* ${escapeMarkdown(formatCampusName(state.campus))}\n` +
+        `🆔 *Telegram ID:* \`${userId}\`\n` +
+        `👤 *Username:* ${escapeMarkdown(usernameTag)}`;
+
+      const adminKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Confirm / Approve", `admin_req_approve_${reqId}`),
+          Markup.button.callback("❌ Cancel / Reject", `admin_req_reject_${reqId}`),
+        ],
+      ]);
+
       const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map(id => Number(id.trim())).filter(id => !isNaN(id));
       for (const adminId of adminIds) {
         try {
-          await bot.telegram.sendMessage(
-            adminId,
-            `📥 *New Delivery Contract Request*\n\n` +
-              `👤 *Name:* ${state.name || "User"}\n` +
-              `📞 *Phone:* ${formatPhoneLink(state.phone)}\n` +
-              `🏫 *Campus:* ${formatCampusName(state.campus)}\n` +
-              `🆔 *Telegram ID:* ${userId}`,
-            { parse_mode: "Markdown" }
-          );
+          await bot.telegram.sendMessage(adminId, adminMsgText, {
+            parse_mode: "Markdown",
+            reply_markup: adminKeyboard.reply_markup,
+          });
         } catch (e) {}
       }
 

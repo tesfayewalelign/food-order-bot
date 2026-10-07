@@ -139,6 +139,7 @@ export async function initDb() {
   try { await db.execute("ALTER TABLE foods ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
   try { await db.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
   try { await db.execute("ALTER TABLE orders ADD COLUMN delivery_price_per_food REAL DEFAULT 0"); } catch(e) {}
+  try { await db.execute("ALTER TABLE contract_requests ADD COLUMN username TEXT"); } catch(e) {}
 
   // Seed default campus delivery prices if empty
   const dpCheck = await db.execute("SELECT COUNT(*) as count FROM delivery_pricing");
