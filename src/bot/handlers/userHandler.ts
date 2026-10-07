@@ -350,11 +350,33 @@ export function handleUserFlow(
             const phone = String(profile?.phone || state.phone || "N/A");
             const campus = String(profile?.campus || state.campus || "N/A");
 
+            const delContract = await checkDeliveryContract(userId);
+            const foodContractsRes = await db.execute({
+              sql: "SELECT restaurant_name, remaining_meals FROM restaurant_contracts WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0",
+              args: [userId],
+            });
+
+            let contractText = "🎫 *Active Contracts:*\n";
+            if (delContract) {
+              contractText += `• 🚚 *Delivery Contract:* *${delContract.remaining_deliveries} deliveries remaining*\n`;
+            } else {
+              contractText += `• 🚚 *Delivery Contract:* None / No active contract\n`;
+            }
+
+            if (foodContractsRes.rows.length > 0) {
+              foodContractsRes.rows.forEach((fc: any) => {
+                contractText += `• 🍽️ *Food Contract (${fc.restaurant_name}):* *${fc.remaining_meals} meals remaining*\n`;
+              });
+            } else {
+              contractText += `• 🍽️ *Food Contract:* None / No active contract\n`;
+            }
+
             return ctx.reply(
               `👤 *My Profile*\n\n` +
                 `👤 *Name:* ${name}\n` +
                 `📞 *Phone:* ${formatPhoneLink(phone)}\n` +
-                `🏫 *Campus:* ${formatCampusName(campus)}`,
+                `🏫 *Campus:* ${formatCampusName(campus)}\n\n` +
+                `${contractText}`,
               { parse_mode: "Markdown" }
             );
           }
@@ -798,6 +820,10 @@ export function handleUserFlow(
 
     if (contract) {
       state.hasDeliveryContract = true;
+      await ctx.reply(
+        `🎫 *Delivery Contract Active!*\n\n📊 Current Balance: *${contract.remaining_deliveries} deliveries remaining*`,
+        { parse_mode: "Markdown" }
+      );
       return showOrderSummary(ctx, state);
     } else {
       state.hasDeliveryContract = false;
@@ -807,7 +833,7 @@ export function handleUserFlow(
       ]);
 
       await ctx.editMessageText(
-        "⚠️ *You do not have an active delivery contract.*",
+        "⚠️ *You do not have an active delivery contract (0 remaining).*",
         {
           parse_mode: "Markdown",
           reply_markup: kb.reply_markup,
@@ -896,6 +922,7 @@ export function handleUserFlow(
   // Display Order Summary
   async function showOrderSummary(ctx: Context, state: UserState) {
     state.step = "confirm_order";
+    const userId = ctx.from!.id;
 
     const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
     const foodSubtotal = state.hasRestaurantContract
@@ -907,9 +934,11 @@ export function handleUserFlow(
     let deliveryFormatted = "";
 
     if (state.hasDeliveryContract) {
+      const delContract = await checkDeliveryContract(userId);
+      const rem = delContract ? Number(delContract.remaining_deliveries) : 0;
       deliveryFee = 0;
       deliveryPricePerFood = 0;
-      deliveryFormatted = "Contract Delivery (0 ETB)";
+      deliveryFormatted = `🎫 Contract Delivery (0 ETB)\n📊 Balance: *${rem} deliveries remaining*`;
     } else {
       const priceInfo = await getApplicableDeliveryPrice(state.campus, state.restaurantId);
       if (!priceInfo) {
@@ -1046,6 +1075,7 @@ export function handleUserFlow(
         });
       }
 
+      let deliveryContractNote = "";
       if (state.hasDeliveryContract) {
         await db.execute({
           sql: `UPDATE delivery_contracts
@@ -1057,6 +1087,10 @@ export function handleUserFlow(
                 )`,
           args: [userId],
         });
+
+        const updatedContract = await checkDeliveryContract(userId);
+        const remAfter = updatedContract ? Number(updatedContract.remaining_deliveries) : 0;
+        deliveryContractNote = `\n\n🚚 *Delivery Contract Used:* 1 delivery consumed (*${remAfter} deliveries remaining*).`;
       }
 
       // 4. Notify active campus riders with normalized matching & fallback (Requirement 6 & 7)
@@ -1132,7 +1166,7 @@ export function handleUserFlow(
       // 5. Respond to user
       await ctx.editMessageText(
         `✅ *Order #${orderId} Placed Successfully!*\n\n` +
-          `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!`,
+          `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
         { parse_mode: "Markdown" }
       );
 
