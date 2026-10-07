@@ -816,15 +816,30 @@ export function handleUserFlow(
     const state = userState.get(userId);
     if (!state) return;
 
+    const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
     const contract = await checkDeliveryContract(userId);
 
-    if (contract) {
+    if (contract && Number(contract.remaining_deliveries) >= totalItems) {
       state.hasDeliveryContract = true;
       await ctx.reply(
-        `🎫 *Delivery Contract Active!*\n\n📊 Current Balance: *${contract.remaining_deliveries} deliveries remaining*`,
+        `🎫 *Delivery Contract Active!*\n\n📊 Balance: *${contract.remaining_deliveries} deliveries remaining*\n🚚 Order contains: *${totalItems} food items* (${totalItems} deliveries will be deducted)`,
         { parse_mode: "Markdown" }
       );
       return showOrderSummary(ctx, state);
+    } else if (contract) {
+      state.hasDeliveryContract = false;
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("📩 Request New Contract", "req_del_contract")],
+        [Markup.button.callback("Continue with Normal Delivery", "continue_no_del_contract")],
+      ]);
+
+      await ctx.editMessageText(
+        `⚠️ *Insufficient delivery contract balance.*\n\nYour contract has *${contract.remaining_deliveries} deliveries remaining*, but your order contains *${totalItems} food items* (${totalItems} required).`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: kb.reply_markup,
+        }
+      );
     } else {
       state.hasDeliveryContract = false;
       const kb = Markup.inlineKeyboard([
@@ -938,7 +953,7 @@ export function handleUserFlow(
       const rem = delContract ? Number(delContract.remaining_deliveries) : 0;
       deliveryFee = 0;
       deliveryPricePerFood = 0;
-      deliveryFormatted = `🎫 Contract Delivery (0 ETB)\n📊 Balance: *${rem} deliveries remaining*`;
+      deliveryFormatted = `🎫 Contract Delivery (0 ETB)\n📊 Balance: *${rem} deliveries* (${totalItems} items = -${totalItems} deliveries → *${rem - totalItems} remaining after order*)`;
     } else {
       const priceInfo = await getApplicableDeliveryPrice(state.campus, state.restaurantId);
       if (!priceInfo) {
@@ -1079,18 +1094,18 @@ export function handleUserFlow(
       if (state.hasDeliveryContract) {
         await db.execute({
           sql: `UPDATE delivery_contracts
-                SET remaining_deliveries = remaining_deliveries - 1
+                SET remaining_deliveries = remaining_deliveries - ?
                 WHERE id = (
                   SELECT id FROM delivery_contracts
-                  WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries > 0
+                  WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
                   LIMIT 1
                 )`,
-          args: [userId],
+          args: [totalItems, userId, totalItems],
         });
 
         const updatedContract = await checkDeliveryContract(userId);
         const remAfter = updatedContract ? Number(updatedContract.remaining_deliveries) : 0;
-        deliveryContractNote = `\n\n🚚 *Delivery Contract Used:* 1 delivery consumed (*${remAfter} deliveries remaining*).`;
+        deliveryContractNote = `\n\n🚚 *Delivery Contract Used:* ${totalItems} delivery units consumed (*${remAfter} deliveries remaining*).`;
       }
 
       // 4. Notify active campus riders with normalized matching & fallback (Requirement 6 & 7)

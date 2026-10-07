@@ -89,7 +89,7 @@ async function runDeliveryPricingTests() {
     "Test 4 — No restaurant override: Fike falls back to campus default 20 ETB/food"
   );
 
-  // --- TEST 5: Contract Delivery Usage (Decrements by 1) ---
+  // --- TEST 5: Contract Delivery Usage (Decrements by ordered food quantity) ---
   const testUserId = 987654321;
   await db.execute({
     sql: "DELETE FROM delivery_contracts WHERE telegram_id = ?",
@@ -100,16 +100,17 @@ async function runDeliveryPricingTests() {
     args: [testUserId],
   });
 
-  // Simulate contract order delivery deduction
+  // Simulate contract order delivery deduction for 2 food items (28 - 2 = 26)
+  const orderedFoodQty = 2;
   await db.execute({
     sql: `UPDATE delivery_contracts
-          SET remaining_deliveries = remaining_deliveries - 1
+          SET remaining_deliveries = remaining_deliveries - ?
           WHERE id = (
             SELECT id FROM delivery_contracts
-            WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries > 0
+            WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
             LIMIT 1
           )`,
-    args: [testUserId],
+    args: [orderedFoodQty, testUserId, orderedFoodQty],
   });
 
   const contractRes = await db.execute({
@@ -118,29 +119,30 @@ async function runDeliveryPricingTests() {
   });
   const rem = Number(contractRes.rows[0]?.remaining_deliveries);
   assert(
-    rem === 27,
-    "Test 5 — Contract delivery: 28 remaining -> 27 remaining after order (decrements by 1, NOT per food item)"
+    rem === 26,
+    "Test 5 — Contract delivery: 28 remaining -> 26 remaining after 2 food items ordered (decrements by food quantity)"
   );
 
-  // --- TEST 6: Contract Exhausted ---
+  // --- TEST 6: Contract Exhausted / Insufficient Balance ---
   await db.execute({
-    sql: "UPDATE delivery_contracts SET remaining_deliveries = 0 WHERE telegram_id = ?",
+    sql: "UPDATE delivery_contracts SET remaining_deliveries = 1 WHERE telegram_id = ?",
     args: [testUserId],
   });
 
+  // Attempt to order 2 items with only 1 remaining delivery
   const updateRes = await db.execute({
     sql: `UPDATE delivery_contracts
-          SET remaining_deliveries = remaining_deliveries - 1
+          SET remaining_deliveries = remaining_deliveries - ?
           WHERE id = (
             SELECT id FROM delivery_contracts
-            WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries > 0
+            WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
             LIMIT 1
           )`,
-    args: [testUserId],
+    args: [2, testUserId, 2],
   });
   assert(
     updateRes.rowsAffected === 0,
-    "Test 6 — Contract exhausted: remaining_deliveries = 0 cannot be used"
+    "Test 6 — Insufficient contract balance: ordering 2 items with 1 remaining delivery is rejected"
   );
 
   // --- TEST 7: Historical Price Preservation ---
