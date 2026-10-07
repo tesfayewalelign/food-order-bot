@@ -15,6 +15,12 @@ export interface User {
   username: string;
 }
 
+export interface SpecialOrderItem {
+  name: string;
+  quantity: number;
+  customerPrice?: number | null;
+}
+
 export interface UserState {
   step:
     | "idle"
@@ -34,7 +40,18 @@ export interface UserState {
     | "custom_restaurant_name"
     | "custom_food_name"
     | "ask_payment_mode"
-    | "waiting_for_complaint";
+    | "waiting_for_complaint"
+    | "so_ask_campus"
+    | "so_choose_restaurant"
+    | "so_custom_restaurant"
+    | "so_choose_location"
+    | "so_custom_location"
+    | "so_ask_food_name"
+    | "so_ask_quantity"
+    | "so_ask_custom_quantity"
+    | "so_ask_price_knowledge"
+    | "so_ask_item_price"
+    | "so_confirm_review";
 
   foods: FoodItem[];
 
@@ -59,6 +76,15 @@ export interface UserState {
   hasRestaurantContract?: boolean;
   hasDeliveryContract?: boolean;
   isSubmittingOrder?: boolean;
+
+  // Special Order fields
+  soDeliveryCampus?: string;
+  soRestaurant?: string;
+  soRestaurantId?: number | null;
+  soLocation?: string;
+  soItems?: SpecialOrderItem[];
+  soCurrentFoodName?: string;
+  soCurrentItemIndex?: number;
 }
 
 export const userState = new Map<number, UserState>();

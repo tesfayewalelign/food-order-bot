@@ -20,6 +20,18 @@ import { COMPANY_CONTACT } from "../../config/company.js";
 import { checkRestaurantContract, checkDeliveryContract } from "../../helpers/contracts.js";
 import { getUserRole } from "../../helpers/roles.js";
 import { getApplicableDeliveryPrice } from "../../helpers/deliveryPricing.js";
+import {
+  getSpecialRestaurantKeyboard,
+  getSpecialLocationKeyboard,
+  specialOrderItemsKeyboard,
+  specialOrderPriceKnowledgeKeyboard,
+  specialOrderReviewKeyboard,
+  getSpecialOrderCustomerFinalConfirmKeyboard,
+} from "../../helpers/specialOrderKeyboards.js";
+import {
+  notifyAdminsNewSpecialOrder,
+  broadcastSpecialOrderToRiders,
+} from "../../helpers/specialOrderNotify.js";
 
 function isTextMessage(msg: any): msg is { text: string } {
   return msg && typeof msg.text === "string";
@@ -70,6 +82,48 @@ function formatCampusName(campus?: string): string {
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+async function sendSpecialOrderCartSummary(ctx: Context, state: UserState) {
+  const itemsText = (state.soItems || [])
+    .map((item) => `• *${escapeMarkdown(item.name)}* × ${item.quantity}`)
+    .join("\n");
+
+  return ctx.reply(
+    `📋 *Special Order Items Cart:*\n\n${itemsText}\n\nWould you like to add another item or finish?`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: specialOrderItemsKeyboard.reply_markup,
+    }
+  );
+}
+
+async function sendSpecialOrderPreliminaryReview(ctx: Context, state: UserState) {
+  const itemsList = (state.soItems || [])
+    .map((item) => {
+      const p = (item.customerPrice !== null && item.customerPrice !== undefined)
+        ? `${item.customerPrice} ETB`
+        : "Price unknown";
+      return `• *${escapeMarkdown(item.name)}* × ${item.quantity} — ${p}`;
+    })
+    .join("\n");
+
+  const campusLabel = formatCampusName(state.soDeliveryCampus || state.campus);
+
+  const summary =
+    `⭐ *Special Order Request*\n\n` +
+    `👤 *Name:* ${escapeMarkdown(state.name || "Customer")}\n` +
+    `📞 *Phone:* ${escapeMarkdown(formatPhoneLink(state.phone))}\n` +
+    `🏫 *Delivery:* ${escapeMarkdown(campusLabel)}\n\n` +
+    `🏪 *Restaurant:* ${escapeMarkdown(state.soRestaurant || "N/A")}\n` +
+    `📍 *Restaurant Location:* ${escapeMarkdown(state.soLocation || "N/A")}\n\n` +
+    `🍔 *Items:*\n${itemsList}\n\n` +
+    `Please review your request and click *📤 Submit Request* when ready.`;
+
+  return ctx.reply(summary, {
+    parse_mode: "Markdown",
+    reply_markup: specialOrderReviewKeyboard.reply_markup,
+  });
 }
 
 export function handleUserFlow(
@@ -284,6 +338,105 @@ export function handleUserFlow(
         }
       }
 
+      if (state.step === "so_custom_restaurant" && isTextMessage(msg)) {
+        const restName = msg.text.trim();
+        if (!restName) {
+          return ctx.reply("⚠️ Please enter a valid restaurant name.");
+        }
+        state.soRestaurant = restName;
+        state.soRestaurantId = null;
+        state.step = "so_choose_location";
+
+        const locKb = await getSpecialLocationKeyboard(null);
+        return ctx.reply(
+          `📍 *Where is ${escapeMarkdown(state.soRestaurant)} located?*`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: locKb.reply_markup,
+          }
+        );
+      }
+
+      if (state.step === "so_custom_location" && isTextMessage(msg)) {
+        const locName = msg.text.trim();
+        if (!locName) {
+          return ctx.reply("⚠️ Please enter a valid location.");
+        }
+        state.soLocation = locName;
+        state.step = "so_ask_food_name";
+
+        return ctx.reply(
+          `🍔 *What food would you like to order?*\n\n(e.g., Burger, Pizza, Chicken Burger)`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (state.step === "so_ask_food_name" && isTextMessage(msg)) {
+        const foodName = msg.text.trim();
+        if (!foodName) {
+          return ctx.reply("⚠️ Please enter a valid food name.");
+        }
+        state.soCurrentFoodName = foodName;
+        state.step = "so_ask_quantity";
+
+        return ctx.reply(
+          `🔢 How many *${escapeMarkdown(foodName)}* would you like?`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: quantityKeyboard.reply_markup,
+          }
+        );
+      }
+
+      if (state.step === "so_ask_custom_quantity" && isTextMessage(msg)) {
+        const quantity = Number(msg.text.trim());
+        if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 100) {
+          return ctx.reply("⚠️ Invalid quantity. Please enter a whole number between 1 and 100.");
+        }
+
+        if (!state.soItems) state.soItems = [];
+        state.soItems.push({
+          name: state.soCurrentFoodName!,
+          quantity,
+          customerPrice: null,
+        });
+        state.soCurrentFoodName = undefined;
+        state.step = "so_ask_quantity";
+
+        return sendSpecialOrderCartSummary(ctx, state);
+      }
+
+      if (state.step === "so_ask_item_price" && isTextMessage(msg)) {
+        const input = msg.text.trim();
+        let price: number | null = null;
+        if (input.toLowerCase() === "unknown" || input.toLowerCase() === "skip" || input === "0") {
+          price = null;
+        } else {
+          price = Number(input);
+          if (isNaN(price) || price <= 0) {
+            return ctx.reply("⚠️ Invalid price. Please enter a valid positive number (e.g. 120) or 0/skip if unknown.");
+          }
+        }
+
+        const idx = state.soCurrentItemIndex || 0;
+        if (state.soItems && state.soItems[idx]) {
+          state.soItems[idx].customerPrice = price;
+        }
+
+        state.soCurrentItemIndex = idx + 1;
+
+        if (state.soItems && state.soCurrentItemIndex < state.soItems.length) {
+          const nextItem = state.soItems[state.soCurrentItemIndex];
+          return ctx.reply(
+            `💰 Enter the price for *${escapeMarkdown(nextItem?.name || "item")}* (per unit in ETB):`,
+            { parse_mode: "Markdown" }
+          );
+        } else {
+          state.step = "so_confirm_review";
+          return sendSpecialOrderPreliminaryReview(ctx, state);
+        }
+      }
+
       if (isTextMessage(msg)) {
         switch (msg.text) {
           case "🍽️ Order Food":
@@ -326,11 +479,40 @@ export function handleUserFlow(
           }
 
           case "⭐ Special Order":
-          case "⭐ Favorite Orders":
+          case "⭐ Favorite Orders": {
+            const profileRes = await db.execute({
+              sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
+              args: [userId],
+            });
+            const profile = profileRes.rows[0];
+
+            if (!profile || !profile.name || !profile.phone) {
+              state.step = "profile_ask_name";
+              userState.set(userId, state);
+              return ctx.reply(
+                "👋 *Welcome to Campus Food Delivery!*\n\nBefore placing a Special Order, please enter your full name:",
+                { parse_mode: "Markdown" }
+              );
+            }
+
+            state.name = String(profile.name);
+            state.phone = String(profile.phone);
+            state.step = "so_ask_campus";
+            state.soItems = [];
+            state.soRestaurant = undefined;
+            state.soRestaurantId = undefined;
+            state.soLocation = undefined;
+            state.soDeliveryCampus = undefined;
+            userState.set(userId, state);
+
             return ctx.reply(
-              "⭐ *Special Order*\n\nSpecial orders will be available here soon.",
-              { parse_mode: "Markdown" }
+              "🏫 *Where should we deliver your order?*\n\nPlease select your delivery campus below:",
+              {
+                parse_mode: "Markdown",
+                reply_markup: campusKeyboard.reply_markup,
+              }
             );
+          }
 
           case "❓ Help":
           case "ℹ️ Help":
@@ -434,6 +616,20 @@ export function handleUserFlow(
       userState.set(userId, state);
     }
 
+    if (state.step === "so_ask_campus") {
+      state.soDeliveryCampus = data;
+      state.step = "so_choose_restaurant";
+
+      const specialRestKb = await getSpecialRestaurantKeyboard();
+      return ctx.editMessageText(
+        "🏪 *What is the name of the restaurant?*\n\nYou can select from listed restaurants or type the restaurant name below.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: specialRestKb.reply_markup,
+        }
+      );
+    }
+
     state.campus = data;
     state.step = "ask_restaurant";
 
@@ -450,6 +646,77 @@ export function handleUserFlow(
       parse_mode: "Markdown",
       reply_markup: restaurantKeyboard.reply_markup,
     });
+  });
+
+  // Special Order: Restaurant Callback Handlers
+  bot.action(/^so_rest_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const data = getCallbackData(ctx);
+    if (!data) return;
+
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    const restId = Number(data.replace("so_rest_", ""));
+    const res = await db.execute({
+      sql: "SELECT id, name FROM special_restaurants WHERE id = ?",
+      args: [restId],
+    });
+    const rest = res.rows[0];
+    if (!rest) return ctx.reply("⚠️ Restaurant not found.");
+
+    state.soRestaurant = String(rest.name);
+    state.soRestaurantId = restId;
+    state.step = "so_choose_location";
+
+    const locKb = await getSpecialLocationKeyboard(restId);
+    await ctx.editMessageText(
+      `📍 *Where is ${escapeMarkdown(state.soRestaurant)} located?*`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: locKb.reply_markup,
+      }
+    );
+  });
+
+  bot.action("so_rest_custom", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    state.step = "so_custom_restaurant";
+    await ctx.editMessageText("🏪 *Please type the restaurant name:*", {
+      parse_mode: "Markdown",
+    });
+  });
+
+  // Special Order: Location Callback Handlers
+  bot.action(/^so_loc_(.+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const data = getCallbackData(ctx);
+    if (!data) return;
+
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    if (data === "so_loc_custom") {
+      state.step = "so_custom_location";
+      return ctx.editMessageText("📍 *Please type the restaurant location:*", {
+        parse_mode: "Markdown",
+      });
+    }
+
+    const locName = data.replace("so_loc_", "");
+    state.soLocation = locName;
+    state.step = "so_ask_food_name";
+
+    await ctx.editMessageText(
+      "🍔 *What food would you like to order?*\n\n(e.g., Burger, Pizza, Chicken Burger)",
+      { parse_mode: "Markdown" }
+    );
   });
 
   bot.action("back_to_campus", async (ctx) => {
@@ -751,9 +1018,24 @@ export function handleUserFlow(
 
     const userId = ctx.from!.id;
     const state = userState.get(userId);
-    if (!state || !state.currentFood || state.currentFoodPrice === undefined) return;
+    if (!state) return;
 
     const quantity = Number(data.replace("qty_", ""));
+
+    if (state.step === "so_ask_quantity") {
+      if (!state.soCurrentFoodName) return;
+      if (!state.soItems) state.soItems = [];
+      state.soItems.push({
+        name: state.soCurrentFoodName,
+        quantity,
+        customerPrice: null,
+      });
+      state.soCurrentFoodName = undefined;
+      return sendSpecialOrderCartSummary(ctx, state);
+    }
+
+    if (!state.currentFood || state.currentFoodPrice === undefined) return;
+
     state.foods.push({
       name: state.currentFood,
       quantity,
@@ -782,10 +1064,220 @@ export function handleUserFlow(
     const state = userState.get(userId);
     if (!state) return;
 
+    if (state.step === "so_ask_quantity") {
+      state.step = "so_ask_custom_quantity";
+      return ctx.reply(`🔢 Enter quantity needed for *${escapeMarkdown(state.soCurrentFoodName)}* (1-100):`, {
+        parse_mode: "Markdown",
+      });
+    }
+
     state.step = "waiting_for_custom_quantity";
     await ctx.reply(`🔢 Enter custom quantity for *${state.currentFood}* (1-50):`, {
       parse_mode: "Markdown",
     });
+  });
+
+  // Special Order Cart Actions
+  bot.action("so_add_item", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    state.step = "so_ask_food_name";
+    await ctx.reply("🍔 *What is the next food item you would like to order?*", {
+      parse_mode: "Markdown",
+    });
+  });
+
+  bot.action("so_done_items", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    if (!state.soItems || state.soItems.length === 0) {
+      return ctx.answerCbQuery("⚠️ Please add at least one item first.", { show_alert: true });
+    }
+
+    state.step = "so_ask_price_knowledge";
+    await ctx.reply(
+      "💰 *Do you know the price of the food at the restaurant?*",
+      {
+        parse_mode: "Markdown",
+        reply_markup: specialOrderPriceKnowledgeKeyboard.reply_markup,
+      }
+    );
+  });
+
+  bot.action("so_price_no", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state) return;
+
+    if (state.soItems) {
+      state.soItems.forEach((i) => (i.customerPrice = null));
+    }
+    state.step = "so_confirm_review";
+    await sendSpecialOrderPreliminaryReview(ctx, state);
+  });
+
+  bot.action("so_price_yes", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    const state = userState.get(userId);
+    if (!state || !state.soItems || state.soItems.length === 0) return;
+
+    state.soCurrentItemIndex = 0;
+    state.step = "so_ask_item_price";
+    const firstItem = state.soItems[0];
+    await ctx.reply(
+      `💰 Enter the price for *${escapeMarkdown(firstItem?.name || "item")}* (per unit in ETB):`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action("so_cancel_request", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from!.id;
+    resetUserState(userId);
+    await ctx.reply("❌ *Special Order request cancelled.*", {
+      parse_mode: "Markdown",
+    });
+  });
+
+  bot.action("so_submit_request", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    const state = userState.get(userId);
+    if (!state || state.step !== "so_confirm_review") return;
+
+    if (state.isSubmittingOrder) return;
+    state.isSubmittingOrder = true;
+
+    try {
+      if (!state.soItems || state.soItems.length === 0) {
+        return ctx.reply("⚠️ No items in Special Order.");
+      }
+
+      const userName = state.name || ctx.from?.first_name || "Customer";
+      const userPhone = state.phone || "N/A";
+      const campus = state.soDeliveryCampus || state.campus || "N/A";
+      const restaurantName = state.soRestaurant || "N/A";
+      const restaurantLocation = state.soLocation || "N/A";
+
+      let foodSubtotal = 0;
+      for (const item of state.soItems) {
+        if (item.customerPrice && item.customerPrice > 0) {
+          foodSubtotal += item.customerPrice * item.quantity;
+        }
+      }
+
+      const insertOrderRes = await db.execute({
+        sql: `INSERT INTO special_orders (
+          telegram_id, user_name, phone, campus, restaurant_name, restaurant_location,
+          status, food_subtotal, delivery_distance, minimum_delivery_fee, price_per_km,
+          delivery_fee, total_price
+        ) VALUES (?, ?, ?, ?, ?, ?, 'submitted', ?, 0, 50, 20, 0, ?)`,
+        args: [
+          userId,
+          userName,
+          userPhone,
+          campus,
+          restaurantName,
+          restaurantLocation,
+          foodSubtotal,
+          foodSubtotal,
+        ],
+      });
+
+      const orderId = Number(insertOrderRes.lastInsertRowid || insertOrderRes.rows[0]?.id);
+
+      for (const item of state.soItems) {
+        const unitPrice = (item.customerPrice !== undefined && item.customerPrice !== null && item.customerPrice > 0)
+          ? item.customerPrice
+          : null;
+        const subtotal = unitPrice ? unitPrice * item.quantity : null;
+        await db.execute({
+          sql: `INSERT INTO special_order_items (
+            special_order_id, item_name, quantity, customer_price, admin_price, final_unit_price, subtotal
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+          args: [orderId, item.name, item.quantity, item.customerPrice ?? null, unitPrice, subtotal],
+        });
+      }
+
+      resetUserState(userId);
+
+      await ctx.reply(
+        `📤 *Your Special Order request #${orderId} has been sent for review.*\n\n` +
+          `Admin will review your request, calculate the delivery fee, and confirm any missing prices. You will receive a final confirmation message shortly.`,
+        { parse_mode: "Markdown" }
+      );
+
+      await notifyAdminsNewSpecialOrder(bot, ADMIN_IDS, orderId);
+    } catch (err) {
+      console.error("[SpecialOrder] Error submitting order:", err);
+      state.isSubmittingOrder = false;
+      await ctx.reply("⚠️ Failed to submit Special Order. Please try again.");
+    }
+  });
+
+  bot.action(/^so_customer_confirm_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^so_customer_confirm_(\d+)$/);
+    if (!match) return;
+    const orderId = Number(match[1]);
+
+    try {
+      const updateRes = await db.execute({
+        sql: "UPDATE special_orders SET status = 'ready_for_delivery', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'admin_confirmed'",
+        args: [orderId],
+      });
+
+      if (updateRes.rowsAffected === 1) {
+        await ctx.reply(
+          `✅ *Your Special Order #${orderId} is confirmed and sent to our riders!*`,
+          { parse_mode: "Markdown" }
+        );
+        await broadcastSpecialOrderToRiders(bot, orderId);
+      } else {
+        await ctx.answerCbQuery("⚠️ Order has already been confirmed or cancelled.", { show_alert: true });
+      }
+    } catch (err) {
+      console.error("[SpecialOrder] Customer confirm error:", err);
+      await ctx.reply("⚠️ Unexpected error during order confirmation.");
+    }
+  });
+
+  bot.action(/^so_customer_cancel_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    const data = getCallbackData(ctx);
+    if (!data) return;
+    const match = data.match(/^so_customer_cancel_(\d+)$/);
+    if (!match) return;
+    const orderId = Number(match[1]);
+
+    try {
+      const updateRes = await db.execute({
+        sql: "UPDATE special_orders SET status = 'customer_cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'admin_confirmed'",
+        args: [orderId],
+      });
+
+      if (updateRes.rowsAffected === 1) {
+        await ctx.reply(
+          `❌ *Your Special Order #${orderId} has been cancelled.*`,
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        await ctx.answerCbQuery("⚠️ Order has already been processed or cancelled.", { show_alert: true });
+      }
+    } catch (err) {
+      console.error("[SpecialOrder] Customer cancel error:", err);
+    }
   });
 
   // Done Selecting Foods -> Ask Delivery Contract Question

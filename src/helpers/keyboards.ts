@@ -15,8 +15,8 @@ export const riderMenuKeyboard = Markup.keyboard([
 export const adminReplyKeyboard = Markup.keyboard([
   ["📊 Dashboard", "🍽 Restaurants", "🍔 Foods"],
   ["🛵 Riders", "📋 Orders", "🚚 Delivery Pricing"],
-  ["📥 Contract Requests", "💬 Complaints", "⚙️ Settings"],
-  ["🏠 Main Menu"],
+  ["📥 Contract Requests", "💬 Complaints", "⭐ Special Orders"],
+  ["⚙️ Settings", "🏠 Main Menu"],
 ]).resize();
 
 export function getMainMenuKeyboard(roleOrIsAdmin: "admin" | "rider" | "customer" | boolean, isDriver?: boolean) {

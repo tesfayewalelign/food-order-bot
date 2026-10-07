@@ -21,6 +21,12 @@ import {
   getRestaurantDeliveryPrices,
   deleteDeliveryPrice,
 } from "../../helpers/deliveryPricing.js";
+import {
+  getSpecialOrderSettings,
+  updateSpecialOrderSettings,
+  calculateSpecialDeliveryFee,
+} from "../../helpers/specialOrderSettings.js";
+import { getSpecialOrderCustomerFinalConfirmKeyboard } from "../../helpers/specialOrderKeyboards.js";
 
 type AdminStateAction =
   | "add_restaurant"
@@ -30,6 +36,12 @@ type AdminStateAction =
   | "add_rider"
   | "set_campus_delivery_price"
   | "set_restaurant_delivery_price"
+  | "so_admin_set_item_price"
+  | "so_admin_set_distance"
+  | "so_admin_add_restaurant"
+  | "so_admin_add_location"
+  | "so_admin_edit_min_fee"
+  | "so_admin_edit_price_km"
   | "none";
 
 interface AdminState {
@@ -38,6 +50,9 @@ interface AdminState {
   foodId?: string | number | null;
   riderId?: string | number | null;
   campusKey?: string;
+  soOrderId?: number;
+  soItemId?: number;
+  soSpecialRestaurantId?: number;
 }
 
 const adminStates = new Map<number, AdminState>();
@@ -54,6 +69,8 @@ function adminMainInlineKeyboard() {
       Markup.button.callback("🍔 Foods", "admin_foods"),
       Markup.button.callback("🛵 Riders", "admin_riders"),
       Markup.button.callback("📋 Orders", "admin_orders"),
+      Markup.button.callback("⭐ Special Orders", "admin_special_orders"),
+      Markup.button.callback("🏪 Special Restaurants", "admin_special_restaurants"),
       Markup.button.callback("📥 Contract Requests", "admin_contract_requests"),
       Markup.button.callback("💬 Complaints", "admin_complaints"),
       Markup.button.callback("⚙️ Settings", "admin_settings"),
@@ -281,6 +298,143 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           );
           adminStates.delete(adminId);
           await showRestaurantPricesMenu(ctx);
+          break;
+        }
+
+        case "so_admin_set_item_price": {
+          if (!state.soItemId || !state.soOrderId) break;
+          const price = Number(text);
+          if (isNaN(price) || price <= 0) {
+            return ctx.reply("⚠️ Please enter a valid positive number for price (e.g. 150).");
+          }
+
+          const itemRes = await db.execute({
+            sql: "SELECT quantity FROM special_order_items WHERE id = ?",
+            args: [state.soItemId],
+          });
+          const qty = Number(itemRes.rows[0]?.quantity || 1);
+          const subtotal = price * qty;
+
+          await db.execute({
+            sql: "UPDATE special_order_items SET admin_price = ?, final_unit_price = ?, subtotal = ? WHERE id = ?",
+            args: [price, price, subtotal, state.soItemId],
+          });
+
+          const sumRes = await db.execute({
+            sql: "SELECT SUM(subtotal) as food_subtotal FROM special_order_items WHERE special_order_id = ?",
+            args: [state.soOrderId],
+          });
+          const foodSubtotal = Number(sumRes.rows[0]?.food_subtotal || 0);
+
+          const orderRes = await db.execute({
+            sql: "SELECT delivery_fee FROM special_orders WHERE id = ?",
+            args: [state.soOrderId],
+          });
+          const delFee = Number(orderRes.rows[0]?.delivery_fee || 0);
+
+          await db.execute({
+            sql: "UPDATE special_orders SET food_subtotal = ?, total_price = ? WHERE id = ?",
+            args: [foodSubtotal, foodSubtotal + delFee, state.soOrderId],
+          });
+
+          const orderId = state.soOrderId;
+          adminStates.delete(adminId);
+          await ctx.reply("✅ Item price updated successfully!");
+          await showSpecialOrderDetails(ctx, orderId);
+          break;
+        }
+
+        case "so_admin_set_distance": {
+          if (!state.soOrderId) break;
+          const dist = Number(text);
+          if (isNaN(dist) || dist < 0) {
+            return ctx.reply("⚠️ Please enter a valid distance in KM (e.g. 4).");
+          }
+
+          const settings = await getSpecialOrderSettings();
+          const delFee = calculateSpecialDeliveryFee(dist, settings.minDeliveryFee, settings.pricePerKm);
+
+          const orderRes = await db.execute({
+            sql: "SELECT food_subtotal FROM special_orders WHERE id = ?",
+            args: [state.soOrderId],
+          });
+          const foodSubtotal = Number(orderRes.rows[0]?.food_subtotal || 0);
+
+          await db.execute({
+            sql: `UPDATE special_orders SET
+              delivery_distance = ?,
+              minimum_delivery_fee = ?,
+              price_per_km = ?,
+              delivery_fee = ?,
+              total_price = ?
+              WHERE id = ?`,
+            args: [
+              dist,
+              settings.minDeliveryFee,
+              settings.pricePerKm,
+              delFee,
+              foodSubtotal + delFee,
+              state.soOrderId,
+            ],
+          });
+
+          const orderId = state.soOrderId;
+          adminStates.delete(adminId);
+          await ctx.reply(`✅ Distance set to ${dist} km. Delivery fee calculated: ${delFee} ETB.`);
+          await showSpecialOrderDetails(ctx, orderId);
+          break;
+        }
+
+        case "so_admin_add_restaurant": {
+          if (!text) return ctx.reply("⚠️ Please enter a valid restaurant name.");
+          await db.execute({
+            sql: "INSERT INTO special_restaurants (name, active) VALUES (?, 1)",
+            args: [text],
+          });
+          adminStates.delete(adminId);
+          await ctx.reply(`✅ Special restaurant "${text}" added!`);
+          await showSpecialRestaurantsMenu(ctx);
+          break;
+        }
+
+        case "so_admin_add_location": {
+          if (!state.soSpecialRestaurantId || !text) {
+            return ctx.reply("⚠️ Please enter a valid location name.");
+          }
+          await db.execute({
+            sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name, active) VALUES (?, ?, 1)",
+            args: [state.soSpecialRestaurantId, text],
+          });
+          const restId = state.soSpecialRestaurantId;
+          adminStates.delete(adminId);
+          await ctx.reply(`✅ Location "${text}" added!`);
+          await showSpecialRestaurantLocations(ctx, restId);
+          break;
+        }
+
+        case "so_admin_edit_min_fee": {
+          const fee = Number(text);
+          if (isNaN(fee) || fee < 0) {
+            return ctx.reply("⚠️ Please enter a valid positive number for minimum delivery fee.");
+          }
+          const settings = await getSpecialOrderSettings();
+          await updateSpecialOrderSettings(fee, settings.pricePerKm);
+          adminStates.delete(adminId);
+          await ctx.reply(`✅ Minimum delivery fee updated to ${fee} ETB.`);
+          await showSpecialOrderSettingsMenu(ctx);
+          break;
+        }
+
+        case "so_admin_edit_price_km": {
+          const pkm = Number(text);
+          if (isNaN(pkm) || pkm < 0) {
+            return ctx.reply("⚠️ Please enter a valid positive number for price per KM.");
+          }
+          const settings = await getSpecialOrderSettings();
+          await updateSpecialOrderSettings(settings.minDeliveryFee, pkm);
+          adminStates.delete(adminId);
+          await ctx.reply(`✅ Price per KM updated to ${pkm} ETB.`);
+          await showSpecialOrderSettingsMenu(ctx);
           break;
         }
 
@@ -1311,4 +1465,566 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     await ctx.reply("✅ Restaurant delivery price override removed.");
     await showRestaurantPricesMenu(ctx);
   });
+
+  // --- SPECIAL ORDERS ADMIN HANDLERS ---
+  bot.hears("⭐ Special Orders", async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    await showSpecialOrdersMenu(ctx);
+  });
+
+  bot.action("admin_special_orders", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showSpecialOrdersMenu(ctx);
+  });
+
+  bot.action(/^so_admin_view_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_view_(\d+)$/);
+    if (!match) return;
+    await showSpecialOrderDetails(ctx, Number(match[1]));
+  });
+
+  bot.action(/^so_admin_set_item_price_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_set_item_price_(\d+)$/);
+    if (!match) return;
+    const itemId = Number(match[1]);
+
+    const itemRes = await db.execute({
+      sql: "SELECT item_name, special_order_id FROM special_order_items WHERE id = ?",
+      args: [itemId],
+    });
+    const item = itemRes.rows[0];
+    if (!item) return ctx.reply("⚠️ Item not found.");
+
+    adminStates.set(adminId, {
+      action: "so_admin_set_item_price",
+      soItemId: itemId,
+      soOrderId: Number(item.special_order_id),
+    });
+
+    await ctx.reply(
+      `💰 Enter confirmed restaurant price for *${escapeMarkdown(String(item.item_name))}* (per unit in ETB):`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action(/^so_admin_set_dist_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_set_dist_(\d+)$/);
+    if (!match) return;
+    const orderId = Number(match[1]);
+
+    adminStates.set(adminId, {
+      action: "so_admin_set_distance",
+      soOrderId: orderId,
+    });
+
+    await ctx.reply("📏 Enter delivery distance in kilometers (e.g. 4):", {
+      parse_mode: "Markdown",
+    });
+  });
+
+  bot.action(/^so_admin_confirm_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_confirm_(\d+)$/);
+    if (!match) return;
+    const orderId = Number(match[1]);
+
+    const orderRes = await db.execute({
+      sql: "SELECT * FROM special_orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+    if (!order) return ctx.reply("⚠️ Order not found.");
+
+    const itemsRes = await db.execute({
+      sql: "SELECT * FROM special_order_items WHERE special_order_id = ?",
+      args: [orderId],
+    });
+    const items = itemsRes.rows;
+
+    const unpriced = items.find(
+      (i: any) => i.final_unit_price === null || i.final_unit_price === undefined || Number(i.final_unit_price || 0) <= 0
+    );
+
+    if (unpriced) {
+      return ctx.answerCbQuery("⚠️ Cannot confirm: some items have unknown prices!", { show_alert: true });
+    }
+
+    const updateRes = await db.execute({
+      sql: "UPDATE special_orders SET status = 'admin_confirmed', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'submitted'",
+      args: [orderId],
+    });
+
+    if (updateRes.rowsAffected === 1) {
+      await ctx.reply(`✅ Special Order #${orderId} confirmed! Sent to customer for final approval.`);
+
+      const itemsListHtml = items
+        .map((i: any) => `• <b>${escapeHTML(String(i.item_name))}</b> × ${i.quantity} — ${i.final_unit_price} ETB`)
+        .join("\n");
+
+      const custMsgHtml =
+        `⭐ <b>Special Order Confirmation</b>\n\n` +
+        `👤 <b>Name:</b> ${escapeHTML(String(order.user_name))}\n` +
+        `📞 <b>Phone:</b> ${escapeHTML(String(order.phone))}\n` +
+        `🏫 <b>Delivery:</b> ${escapeHTML(formatCampusName(String(order.campus)))}\n\n` +
+        `🏪 <b>Restaurant:</b> ${escapeHTML(String(order.restaurant_name))}\n` +
+        `📍 <b>Restaurant Location:</b> ${escapeHTML(String(order.restaurant_location))}\n\n` +
+        `🍔 <b>Items:</b>\n${itemsListHtml}\n\n` +
+        `🍽️ <b>Food Total:</b> ${order.food_subtotal} ETB\n` +
+        `🚚 <b>Delivery Fee:</b> ${order.delivery_fee} ETB\n\n` +
+        `💰 <b>Grand Total: ${order.total_price} ETB</b>`;
+
+      const custKeyboard = getSpecialOrderCustomerFinalConfirmKeyboard(orderId);
+
+      try {
+        await bot.telegram.sendMessage(Number(order.telegram_id), custMsgHtml, {
+          parse_mode: "HTML",
+          reply_markup: custKeyboard.reply_markup,
+        });
+      } catch (sendErr) {
+        console.error(`[AdminHandler] Failed sending final confirmation to customer:`, sendErr);
+      }
+    } else {
+      await ctx.answerCbQuery("⚠️ Order already confirmed or processed.", { show_alert: true });
+    }
+  });
+
+  bot.action(/^so_admin_reject_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_reject_(\d+)$/);
+    if (!match) return;
+    const orderId = Number(match[1]);
+
+    const orderRes = await db.execute({
+      sql: "SELECT * FROM special_orders WHERE id = ?",
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+    if (!order) return;
+
+    await db.execute({
+      sql: "UPDATE special_orders SET status = 'admin_rejected', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      args: [orderId],
+    });
+
+    await ctx.reply(`❌ Special Order #${orderId} rejected.`);
+
+    try {
+      await bot.telegram.sendMessage(
+        Number(order.telegram_id),
+        `❌ *Sorry, your Special Order #${orderId} could not be accepted.*`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (sendErr) {
+      console.error(`[AdminHandler] Failed to notify user of rejection:`, sendErr);
+    }
+  });
+
+  // --- SPECIAL RESTAURANTS ADMIN HANDLERS ---
+  bot.hears("🏪 Special Restaurants", async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    await showSpecialRestaurantsMenu(ctx);
+  });
+
+  bot.action("admin_special_restaurants", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showSpecialRestaurantsMenu(ctx);
+  });
+
+  bot.action("so_admin_add_restaurant", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    adminStates.set(adminId, { action: "so_admin_add_restaurant" });
+    await ctx.reply("🏪 Enter Special Restaurant name:");
+  });
+
+  bot.action(/^so_admin_toggle_rest_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_toggle_rest_(\d+)$/);
+    if (!match) return;
+    const restId = Number(match[1]);
+
+    await db.execute({
+      sql: "UPDATE special_restaurants SET active = CASE WHEN active = 1 THEN 0 ELSE 1 END WHERE id = ?",
+      args: [restId],
+    });
+
+    await showSpecialRestaurantsMenu(ctx);
+  });
+
+  bot.action(/^so_admin_manage_locs_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_manage_locs_(\d+)$/);
+    if (!match) return;
+    await showSpecialRestaurantLocations(ctx, Number(match[1]));
+  });
+
+  bot.action(/^so_admin_add_loc_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_add_loc_(\d+)$/);
+    if (!match) return;
+    const restId = Number(match[1]);
+
+    adminStates.set(adminId, { action: "so_admin_add_location", soSpecialRestaurantId: restId });
+    await ctx.reply("📍 Enter location name for this restaurant:");
+  });
+
+  bot.action(/^so_admin_toggle_loc_(\d+)_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const data = getCallbackData(ctx);
+    const match = data?.match(/^so_admin_toggle_loc_(\d+)_(\d+)$/);
+    if (!match) return;
+    const locId = Number(match[1]);
+    const restId = Number(match[2]);
+
+    await db.execute({
+      sql: "UPDATE special_restaurant_locations SET active = CASE WHEN active = 1 THEN 0 ELSE 1 END WHERE id = ?",
+      args: [locId],
+    });
+
+    await showSpecialRestaurantLocations(ctx, restId);
+  });
+
+  // --- SPECIAL ORDER SETTINGS ---
+  bot.action("admin_so_settings", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    await showSpecialOrderSettingsMenu(ctx);
+  });
+
+  bot.action("so_admin_edit_min_fee", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    adminStates.set(adminId, { action: "so_admin_edit_min_fee" });
+    await ctx.reply("🚚 Enter new Minimum Delivery Fee (ETB):");
+  });
+
+  bot.action("so_admin_edit_price_km", async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const adminId = ctx.from!.id;
+    adminStates.set(adminId, { action: "so_admin_edit_price_km" });
+    await ctx.reply("📏 Enter new Price Per KM (ETB):");
+  });
+}
+
+const getCallbackData = (ctx: Context) =>
+  (ctx.callbackQuery as { data?: string } | undefined)?.data ?? null;
+
+function escapeHTML(str?: string): string {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeMarkdown(str?: string): string {
+  if (!str) return "";
+  return str.replace(/[_*`\[\]]/g, "\\$&");
+}
+
+function normalizePhone(phone?: string): string {
+  if (!phone) return "";
+  let cleaned = phone.replace(/[^0-9+]/g, "");
+  if (cleaned.startsWith("09")) {
+    cleaned = "+2519" + cleaned.slice(2);
+  } else if (cleaned.startsWith("07")) {
+    cleaned = "+2517" + cleaned.slice(2);
+  } else if (cleaned.startsWith("251")) {
+    cleaned = "+" + cleaned;
+  }
+  return cleaned;
+}
+
+async function showSpecialOrdersMenu(ctx: Context) {
+  const pendingRes = await db.execute("SELECT COUNT(*) as cnt FROM special_orders WHERE status = 'submitted'");
+  const pendingCnt = Number(pendingRes.rows[0]?.cnt || 0);
+
+  const confirmRes = await db.execute("SELECT COUNT(*) as cnt FROM special_orders WHERE status = 'admin_confirmed'");
+  const confirmCnt = Number(confirmRes.rows[0]?.cnt || 0);
+
+  const readyRes = await db.execute("SELECT COUNT(*) as cnt FROM special_orders WHERE status = 'ready_for_delivery'");
+  const readyCnt = Number(readyRes.rows[0]?.cnt || 0);
+
+  const activeRes = await db.execute("SELECT COUNT(*) as cnt FROM special_orders WHERE status IN ('accepted', 'on_the_way', 'picked_up')");
+  const activeCnt = Number(activeRes.rows[0]?.cnt || 0);
+
+  const ordersRes = await db.execute("SELECT id, user_name, restaurant_name, status, total_price, created_at FROM special_orders ORDER BY id DESC LIMIT 15");
+  const recentOrders = ordersRes.rows;
+
+  let msgText =
+    `⭐ <b>Special Orders Dashboard</b>\n\n` +
+    `📥 <b>Pending Review:</b> ${pendingCnt}\n` +
+    `📩 <b>Waiting Customer Confirmation:</b> ${confirmCnt}\n` +
+    `🚚 <b>Ready for Delivery:</b> ${readyCnt}\n` +
+    `🛵 <b>Active Deliveries:</b> ${activeCnt}\n\n` +
+    `📋 <b>Recent Special Orders:</b>\n`;
+
+  const buttons: any[] = [];
+
+  if (recentOrders.length > 0) {
+    for (const o of recentOrders) {
+      msgText += `• <b>#${o.id}</b> ${escapeHTML(String(o.user_name))} — ${escapeHTML(String(o.restaurant_name))} [${o.status}]\n`;
+      buttons.push([
+        Markup.button.callback(`🔍 View #${o.id} (${o.status})`, `so_admin_view_${o.id}`),
+      ]);
+    }
+  } else {
+    msgText += `<i>No special orders created yet.</i>\n`;
+  }
+
+  buttons.push([
+    Markup.button.callback("🏪 Special Restaurants", "admin_special_restaurants"),
+    Markup.button.callback("⚙️ Delivery Settings", "admin_so_settings"),
+  ]);
+
+  buttons.push([
+    Markup.button.callback("🏠 Admin Menu", "admin_main"),
+  ]);
+
+  const keyboard = Markup.inlineKeyboard(buttons);
+
+  try {
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(msgText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard.reply_markup,
+      });
+    } else {
+      await ctx.reply(msgText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  } catch (e) {
+    await ctx.reply(msgText, {
+      parse_mode: "HTML",
+      reply_markup: keyboard.reply_markup,
+    });
+  }
+}
+
+async function showSpecialOrderDetails(ctx: Context, orderId: number) {
+  const orderRes = await db.execute({
+    sql: "SELECT * FROM special_orders WHERE id = ?",
+    args: [orderId],
+  });
+  const order = orderRes.rows[0];
+  if (!order) return ctx.reply("⚠️ Special Order not found.");
+
+  const itemsRes = await db.execute({
+    sql: "SELECT * FROM special_order_items WHERE special_order_id = ?",
+    args: [orderId],
+  });
+  const items = itemsRes.rows;
+
+  let hasMissingPrice = false;
+  const itemsList = items
+    .map((i: any) => {
+      const isMissing = i.final_unit_price === null || i.final_unit_price === undefined || Number(i.final_unit_price || 0) <= 0;
+      if (isMissing) hasMissingPrice = true;
+      const p = isMissing ? "⚠️ Price Unknown" : `${i.final_unit_price} ETB`;
+      const custP = i.customer_price !== null ? ` (Cust: ${i.customer_price} ETB)` : "";
+      return `• <b>${escapeHTML(String(i.item_name))}</b> × ${i.quantity} — ${p}${custP}`;
+    })
+    .join("\n");
+
+  const statusBadge =
+    order.status === "submitted"
+      ? "⏳ Waiting for Admin Review"
+      : order.status === "admin_confirmed"
+      ? "📩 Waiting for Customer Confirmation"
+      : order.status === "ready_for_delivery"
+      ? "🚚 Ready for Delivery"
+      : order.status === "accepted"
+      ? "🛵 Accepted by Rider"
+      : order.status === "admin_rejected"
+      ? "❌ Rejected by Admin"
+      : order.status === "customer_cancelled"
+      ? "❌ Cancelled by Customer"
+      : order.status;
+
+  const msgText =
+    `⭐ <b>SPECIAL ORDER #${order.id}</b>\n\n` +
+    `👤 <b>Customer:</b> ${escapeHTML(String(order.user_name))}\n` +
+    `📞 <b>Phone:</b> <a href="tel:${normalizePhone(String(order.phone))}">${escapeHTML(String(order.phone))}</a>\n` +
+    `🏫 <b>Delivery Campus:</b> ${escapeHTML(formatCampusName(String(order.campus)))}\n\n` +
+    `🏪 <b>Restaurant:</b> ${escapeHTML(String(order.restaurant_name))}\n` +
+    `📍 <b>Restaurant Location:</b> ${escapeHTML(String(order.restaurant_location))}\n\n` +
+    `🍔 <b>Items Requested:</b>\n${itemsList}\n\n` +
+    `🚚 <b>Delivery Fee Calculation:</b>\n` +
+    `• Distance: ${order.delivery_distance ? `${order.delivery_distance} km` : "⚠️ Distance not set"}\n` +
+    `• Minimum Fee: ${order.minimum_delivery_fee} ETB\n` +
+    `• Price / KM: ${order.price_per_km} ETB\n` +
+    `• <b>Calculated Delivery Fee:</b> ${order.delivery_fee} ETB\n\n` +
+    `💰 <b>Order Pricing Summary:</b>\n` +
+    `• Food Subtotal: ${order.food_subtotal} ETB\n` +
+    `• Delivery Fee: ${order.delivery_fee} ETB\n` +
+    `• <b>Grand Total: ${order.total_price} ETB</b>\n\n` +
+    `📦 <b>Status:</b> ${statusBadge}`;
+
+  const buttons: any[] = [];
+
+  for (const item of items) {
+    const isMissing = item.final_unit_price === null || item.final_unit_price === undefined || Number(item.final_unit_price || 0) <= 0;
+    if (isMissing) {
+      buttons.push([
+        Markup.button.callback(
+          `💰 Set Price for ${String(item.item_name).slice(0, 15)}`,
+          `so_admin_set_item_price_${item.id}`
+        ),
+      ]);
+    }
+  }
+
+  buttons.push([
+    Markup.button.callback("📏 Set Delivery Distance (KM)", `so_admin_set_dist_${order.id}`),
+  ]);
+
+  if (order.status === "submitted") {
+    if (!hasMissingPrice && Number(order.delivery_distance) >= 0) {
+      buttons.push([
+        Markup.button.callback("✅ Confirm Order & Send to Customer", `so_admin_confirm_${order.id}`),
+      ]);
+    }
+    buttons.push([
+      Markup.button.callback("❌ Reject Order", `so_admin_reject_${order.id}`),
+    ]);
+  }
+
+  buttons.push([
+    Markup.button.callback("🔙 Back to Special Orders", "admin_special_orders"),
+  ]);
+
+  const keyboard = Markup.inlineKeyboard(buttons);
+
+  try {
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(msgText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard.reply_markup,
+      });
+    } else {
+      await ctx.reply(msgText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard.reply_markup,
+      });
+    }
+  } catch (e) {
+    await ctx.reply(msgText, {
+      parse_mode: "HTML",
+      reply_markup: keyboard.reply_markup,
+    });
+  }
+}
+
+async function showSpecialRestaurantsMenu(ctx: Context) {
+  const restRes = await db.execute("SELECT * FROM special_restaurants ORDER BY id DESC");
+  const rests = restRes.rows;
+
+  let msgText = `🏪 <b>Special Order Restaurants Management</b>\n\n`;
+  const buttons: any[] = [
+    [Markup.button.callback("➕ Add Special Restaurant", "so_admin_add_restaurant")],
+  ];
+
+  if (rests.length > 0) {
+    for (const r of rests) {
+      const activeStr = r.active ? "🟢 Active" : "🔴 Inactive";
+      msgText += `• <b>${escapeHTML(String(r.name))}</b> (${activeStr})\n`;
+      buttons.push([
+        Markup.button.callback(`📍 Locations for ${String(r.name).slice(0, 12)}`, `so_admin_manage_locs_${r.id}`),
+        Markup.button.callback(r.active ? "🔴 Deactivate" : "🟢 Activate", `so_admin_toggle_rest_${r.id}`),
+      ]);
+    }
+  } else {
+    msgText += `<i>No special restaurants registered.</i>\n`;
+  }
+
+  buttons.push([
+    Markup.button.callback("🔙 Back to Special Orders", "admin_special_orders"),
+  ]);
+
+  const keyboard = Markup.inlineKeyboard(buttons);
+  await ctx.reply(msgText, { parse_mode: "HTML", reply_markup: keyboard.reply_markup });
+}
+
+async function showSpecialRestaurantLocations(ctx: Context, restId: number) {
+  const restRes = await db.execute({ sql: "SELECT * FROM special_restaurants WHERE id = ?", args: [restId] });
+  const rest = restRes.rows[0];
+  if (!rest) return ctx.reply("⚠️ Special restaurant not found.");
+
+  const locRes = await db.execute({
+    sql: "SELECT * FROM special_restaurant_locations WHERE special_restaurant_id = ? ORDER BY id DESC",
+    args: [restId],
+  });
+  const locs = locRes.rows;
+
+  let msgText = `📍 <b>Locations for ${escapeHTML(String(rest.name))}</b>\n\n`;
+  const buttons: any[] = [
+    [Markup.button.callback(`➕ Add Location to ${String(rest.name).slice(0, 12)}`, `so_admin_add_loc_${restId}`)],
+  ];
+
+  if (locs.length > 0) {
+    for (const l of locs) {
+      const activeStr = l.active ? "🟢 Active" : "🔴 Inactive";
+      msgText += `• <b>${escapeHTML(String(l.location_name))}</b> (${activeStr})\n`;
+      buttons.push([
+        Markup.button.callback(`Toggle ${String(l.location_name).slice(0, 12)}`, `so_admin_toggle_loc_${l.id}_${restId}`),
+      ]);
+    }
+  } else {
+    msgText += `<i>No locations configured yet.</i>\n`;
+  }
+
+  buttons.push([
+    Markup.button.callback("🔙 Back to Special Restaurants", "admin_special_restaurants"),
+  ]);
+
+  const keyboard = Markup.inlineKeyboard(buttons);
+  await ctx.reply(msgText, { parse_mode: "HTML", reply_markup: keyboard.reply_markup });
+}
+
+async function showSpecialOrderSettingsMenu(ctx: Context) {
+  const settings = await getSpecialOrderSettings();
+
+  const msgText =
+    `⚙️ <b>Special Order Delivery Pricing Settings</b>\n\n` +
+    `• <b>Minimum Delivery Fee:</b> ${settings.minDeliveryFee} ETB\n` +
+    `• <b>Price Per KM:</b> ${settings.pricePerKm} ETB\n\n` +
+    `Formula: <code>Delivery Fee = Minimum Fee + (Distance × Price Per KM)</code>`;
+
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback("✏️ Edit Minimum Fee", "so_admin_edit_min_fee")],
+    [Markup.button.callback("✏️ Edit Price / KM", "so_admin_edit_price_km")],
+    [Markup.button.callback("🔙 Back to Special Orders", "admin_special_orders")],
+  ]);
+
+  await ctx.reply(msgText, { parse_mode: "HTML", reply_markup: keyboard.reply_markup });
 }

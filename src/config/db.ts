@@ -132,6 +132,60 @@ export async function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS special_restaurants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS special_restaurant_locations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      special_restaurant_id INTEGER NOT NULL,
+      location_name TEXT NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (special_restaurant_id) REFERENCES special_restaurants(id) ON DELETE CASCADE
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS special_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id INTEGER NOT NULL,
+      user_name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      campus TEXT NOT NULL,
+      restaurant_name TEXT NOT NULL,
+      restaurant_location TEXT NOT NULL,
+      status TEXT DEFAULT 'submitted',
+      food_subtotal REAL DEFAULT 0,
+      delivery_distance REAL DEFAULT 0,
+      minimum_delivery_fee REAL DEFAULT 50,
+      price_per_km REAL DEFAULT 20,
+      delivery_fee REAL DEFAULT 0,
+      total_price REAL DEFAULT 0,
+      rider_id INTEGER,
+      rider_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS special_order_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      special_order_id INTEGER NOT NULL,
+      item_name TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      customer_price REAL,
+      admin_price REAL,
+      final_unit_price REAL,
+      subtotal REAL,
+      FOREIGN KEY (special_order_id) REFERENCES special_orders(id) ON DELETE CASCADE
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS special_order_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );`
   ]);
 
@@ -140,6 +194,47 @@ export async function initDb() {
   try { await db.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
   try { await db.execute("ALTER TABLE orders ADD COLUMN delivery_price_per_food REAL DEFAULT 0"); } catch(e) {}
   try { await db.execute("ALTER TABLE contract_requests ADD COLUMN username TEXT"); } catch(e) {}
+
+  // Seed default special order settings if missing
+  await db.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('min_delivery_fee', '50')");
+  await db.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('price_per_km', '20')");
+
+  // Seed sample special restaurants if empty
+  const specRestCheck = await db.execute("SELECT COUNT(*) as count FROM special_restaurants");
+  const specRestCount = Number(specRestCheck.rows[0]?.count ?? 0);
+  if (specRestCount === 0) {
+    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Mountain Restaurant')");
+    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Pizza House')");
+    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Burger House')");
+
+    const mountainRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Mountain Restaurant'");
+    const mountainId = Number(mountainRes.rows[0]?.id);
+    if (mountainId) {
+      await db.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Piassa"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Menahariya"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Hayk"] },
+      ]);
+    }
+
+    const pizzaRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Pizza House'");
+    const pizzaId = Number(pizzaRes.rows[0]?.id);
+    if (pizzaId) {
+      await db.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Gibi Fit Lefit"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Mobil Atote"] },
+      ]);
+    }
+
+    const burgerRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Burger House'");
+    const burgerId = Number(burgerRes.rows[0]?.id);
+    if (burgerId) {
+      await db.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Trufat"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Piassa"] },
+      ]);
+    }
+  }
 
   // Seed default campus delivery prices if empty
   const dpCheck = await db.execute("SELECT COUNT(*) as count FROM delivery_pricing");
