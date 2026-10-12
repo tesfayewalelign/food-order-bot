@@ -1,5 +1,6 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { db } from "../../config/db.js";
+import { Client } from "@libsql/client";
 import { userState, resetUserState, UserState } from "../../helpers/state.js";
 import {
   getMainMenuKeyboard,
@@ -124,6 +125,157 @@ async function sendSpecialOrderPreliminaryReview(ctx: Context, state: UserState)
     parse_mode: "Markdown",
     reply_markup: specialOrderReviewKeyboard.reply_markup,
   });
+}
+
+export interface PlaceNormalOrderParams {
+  userId: number;
+  name?: string;
+  phone?: string;
+  campus?: string;
+  restaurant?: string;
+  restaurantId?: number | string | null;
+  mealType?: string;
+  foods: Array<{ name: string; quantity: number; price: number }>;
+  hasRestaurantContract?: boolean;
+  hasDeliveryContract?: boolean;
+  foodSubtotal: number;
+  deliveryFee: number;
+  deliveryPricePerFood: number;
+  grandTotal: number;
+  foodsSummary: string;
+  client?: Client;
+}
+
+export interface PlaceNormalOrderResult {
+  orderId: number;
+  remainingDeliveries?: number;
+}
+
+export async function executeNormalOrderTransaction(
+  params: PlaceNormalOrderParams
+): Promise<PlaceNormalOrderResult> {
+  const dbClient = params.client || db;
+  const tx = await dbClient.transaction("write");
+
+  try {
+    // 1. Decrement restaurant contract meals if applicable
+    if (params.hasRestaurantContract) {
+      let restSql = `UPDATE restaurant_contracts
+            SET remaining_meals = remaining_meals - 1
+            WHERE id = (
+              SELECT id FROM restaurant_contracts
+              WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0`;
+      const restArgs: any[] = [params.userId];
+
+      if (params.restaurantId) {
+        restSql += ` AND (restaurant_id = ? OR restaurant_name = ?)`;
+        restArgs.push(Number(params.restaurantId), params.restaurant || "");
+      }
+      restSql += ` LIMIT 1)`;
+
+      let restRes = await tx.execute({
+        sql: restSql,
+        args: restArgs,
+      });
+
+      // Fallback if specific restaurant_id was not matched but active contract exists for user
+      if (restRes.rowsAffected === 0 && params.restaurantId) {
+        restRes = await tx.execute({
+          sql: `UPDATE restaurant_contracts
+                SET remaining_meals = remaining_meals - 1
+                WHERE id = (
+                  SELECT id FROM restaurant_contracts
+                  WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0
+                  LIMIT 1
+                )`,
+          args: [params.userId],
+        });
+      }
+
+      if (restRes.rowsAffected === 0) {
+        throw new Error("Insufficient restaurant contract balance or no active contract found.");
+      }
+    }
+
+    // 2. Decrement delivery contract units if applicable
+    let remainingDeliveries: number | undefined;
+    if (params.hasDeliveryContract) {
+      const totalItems = params.foods.reduce((acc, f) => acc + f.quantity, 0);
+      const delRes = await tx.execute({
+        sql: `UPDATE delivery_contracts
+              SET remaining_deliveries = remaining_deliveries - ?
+              WHERE id = (
+                SELECT id FROM delivery_contracts
+                WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
+                LIMIT 1
+              )`,
+        args: [totalItems, params.userId, totalItems],
+      });
+
+      if (delRes.rowsAffected === 0) {
+        throw new Error("Insufficient delivery contract balance or no active contract found.");
+      }
+
+      const remRes = await tx.execute({
+        sql: `SELECT remaining_deliveries FROM delivery_contracts WHERE telegram_id = ? AND is_active = 1 LIMIT 1`,
+        args: [params.userId],
+      });
+      remainingDeliveries = remRes.rows[0] ? Number(remRes.rows[0].remaining_deliveries) : 0;
+    }
+
+    // 3. Insert order record
+    const orderRes = await tx.execute({
+      sql: `INSERT INTO orders (telegram_id, user_name, phone, campus, restaurant, meal_type, restaurant_id, foods_summary, has_restaurant_contract, has_delivery_contract, food_total, delivery_fee, total_price, delivery_price_per_food, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+            RETURNING id;`,
+      args: [
+        params.userId,
+        params.name || "Customer",
+        params.phone || "",
+        params.campus || "",
+        params.restaurant || "",
+        params.mealType || "",
+        params.restaurantId ? Number(params.restaurantId) : null,
+        params.foodsSummary,
+        params.hasRestaurantContract ? 1 : 0,
+        params.hasDeliveryContract ? 1 : 0,
+        params.foodSubtotal,
+        params.deliveryFee,
+        params.grandTotal,
+        params.deliveryPricePerFood,
+      ],
+    });
+
+    const orderId = Number(orderRes.rows[0]?.id ?? orderRes.lastInsertRowid);
+    if (!orderId || isNaN(orderId)) {
+      throw new Error("Failed to retrieve order ID after insertion.");
+    }
+
+    // 4. Insert order items with price_at_order preservation
+    for (const item of params.foods) {
+      const itemRes = await tx.execute({
+        sql: `INSERT INTO order_items (order_id, food_name, quantity, price_at_order)
+              VALUES (?, ?, ?, ?)`,
+        args: [orderId, item.name, item.quantity, item.price],
+      });
+      if (itemRes.rowsAffected === 0) {
+        throw new Error(`Failed to insert order item: ${item.name}`);
+      }
+    }
+
+    // 5. Commit transaction
+    await tx.commit();
+    return { orderId, remainingDeliveries };
+  } catch (txErr) {
+    if (!tx.closed) {
+      await tx.rollback().catch(() => {});
+    }
+    throw txErr;
+  } finally {
+    if (!tx.closed) {
+      tx.close();
+    }
+  }
 }
 
 export function handleUserFlow(
@@ -1506,6 +1658,10 @@ export function handleUserFlow(
     }
     state.isSubmittingOrder = true;
 
+    let orderCommitted = false;
+    let orderId = 0;
+    let deliveryContractNote = "";
+
     try {
       const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
       const foodSubtotal = state.hasRestaurantContract
@@ -1534,69 +1690,29 @@ export function handleUserFlow(
         .map((f) => `${f.name} x${f.quantity}`)
         .join(", ");
 
-      // 1. Insert order record
-      const orderRes = await db.execute({
-        sql: `INSERT INTO orders (telegram_id, user_name, phone, campus, restaurant, meal_type, restaurant_id, foods_summary, has_restaurant_contract, has_delivery_contract, food_total, delivery_fee, total_price, delivery_price_per_food, status)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-              RETURNING id;`,
-        args: [
-          userId,
-          state.name || "Customer",
-          state.phone || "",
-          state.campus || "",
-          state.restaurant || "",
-          state.mealType || "",
-          state.restaurantId ? Number(state.restaurantId) : null,
-          foodsSummary,
-          state.hasRestaurantContract ? 1 : 0,
-          state.hasDeliveryContract ? 1 : 0,
-          foodSubtotal,
-          deliveryFee,
-          grandTotal,
-          deliveryPricePerFood,
-        ],
+      const txResult = await executeNormalOrderTransaction({
+        userId,
+        name: state.name || "Customer",
+        phone: state.phone || "",
+        campus: state.campus || "",
+        restaurant: state.restaurant || "",
+        restaurantId: state.restaurantId ? Number(state.restaurantId) : null,
+        mealType: state.mealType || "",
+        foods: state.foods,
+        hasRestaurantContract: state.hasRestaurantContract,
+        hasDeliveryContract: state.hasDeliveryContract,
+        foodSubtotal,
+        deliveryFee,
+        deliveryPricePerFood,
+        grandTotal,
+        foodsSummary,
       });
 
-      const orderId = Number(orderRes.rows[0]?.id);
+      orderCommitted = true;
+      orderId = txResult.orderId;
 
-      // 2. Insert order items with price_at_order preservation (Requirement 15)
-      for (const item of state.foods) {
-        await db.execute({
-          sql: `INSERT INTO order_items (order_id, food_name, quantity, price_at_order)
-                VALUES (?, ?, ?, ?)`,
-          args: [orderId, item.name, item.quantity, item.price],
-        });
-      }
-
-      // 3. Decrement contract counters if active safely (Requirement 20)
-      if (state.hasRestaurantContract) {
-        await db.execute({
-          sql: `UPDATE restaurant_contracts
-                SET remaining_meals = remaining_meals - 1
-                WHERE id = (
-                  SELECT id FROM restaurant_contracts
-                  WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0
-                  LIMIT 1
-                )`,
-          args: [userId],
-        });
-      }
-
-      let deliveryContractNote = "";
       if (state.hasDeliveryContract) {
-        await db.execute({
-          sql: `UPDATE delivery_contracts
-                SET remaining_deliveries = remaining_deliveries - ?
-                WHERE id = (
-                  SELECT id FROM delivery_contracts
-                  WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
-                  LIMIT 1
-                )`,
-          args: [totalItems, userId, totalItems],
-        });
-
-        const updatedContract = await checkDeliveryContract(userId);
-        const remAfter = updatedContract ? Number(updatedContract.remaining_deliveries) : 0;
+        const remAfter = txResult.remainingDeliveries ?? 0;
         deliveryContractNote = `\n\n🚚 *Delivery Contract Used:* ${totalItems} delivery units consumed (*${remAfter} deliveries remaining*).`;
       }
 
@@ -1671,17 +1787,31 @@ export function handleUserFlow(
       }
 
       // 5. Respond to user
-      await ctx.editMessageText(
-        `✅ *Order #${orderId} Placed Successfully!*\n\n` +
-          `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
-        { parse_mode: "Markdown" }
-      );
+      try {
+        await ctx.editMessageText(
+          `✅ *Order #${orderId} Placed Successfully!*\n\n` +
+            `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (editErr) {
+        console.error("⚠️ Failed editing message, sending fallback reply:", editErr);
+        await ctx.reply(
+          `✅ *Order #${orderId} Placed Successfully!*\n\n` +
+            `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
+          { parse_mode: "Markdown" }
+        );
+      }
 
       resetUserState(userId);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Confirm order error:", err);
       state.isSubmittingOrder = false;
-      await ctx.reply("❌ Order submission failed. Please try again.");
+      if (!orderCommitted) {
+        const errorMsg = err?.message && err.message.includes("contract balance")
+          ? `❌ Order failed: ${err.message}`
+          : "❌ Order submission failed. Please try again.";
+        await ctx.reply(errorMsg);
+      }
     }
   });
 

@@ -34,7 +34,12 @@ if (!process.env.BOT_TOKEN) {
   process.exit(1);
 }
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+import https from "https";
+
+const agent = new https.Agent({ family: 4, keepAlive: true });
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  telegram: { agent },
+});
 
 setupStartHandler(bot, ADMIN_IDS);
 setupAdminHandler(bot, ADMIN_IDS);
@@ -76,7 +81,9 @@ if (isProduction) {
     });
   }).catch((err) => {
     console.error("⚠️ Failed to delete webhook, attempting launch anyway:", err);
-    bot.launch();
+    bot.launch(() => {
+      console.log("✅ Bot is online and listening for Telegram updates via polling!");
+    });
   });
 
   app.get("/", (req, res) => {

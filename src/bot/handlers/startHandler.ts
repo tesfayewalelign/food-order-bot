@@ -1,5 +1,6 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { db } from "../../config/db.js";
+import { Client } from "@libsql/client";
 import {
   resetUserState,
   initUserState,
@@ -20,7 +21,11 @@ function isContactMessage(
   return !!msg.contact && !!msg.contact.phone_number;
 }
 
-export async function activateRiderHelper(ctx: Context, code: string): Promise<boolean> {
+export async function activateRiderHelper(
+  ctx: Context,
+  code: string,
+  dbClient: Client = db
+): Promise<boolean> {
   const userId = ctx.from?.id;
   if (!userId) return false;
 
@@ -28,18 +33,39 @@ export async function activateRiderHelper(ctx: Context, code: string): Promise<b
   if (!cleanCode) return false;
 
   try {
-    const riderRes = await db.execute({
-      sql: "SELECT * FROM riders WHERE secret_code = ? AND active = 1",
+    // 1. Guard against already activated riders improperly activating again
+    const existingRider = await dbClient.execute({
+      sql: "SELECT id, name FROM riders WHERE telegram_id = ? AND active = 1",
+      args: [userId],
+    });
+    if (existingRider.rows.length > 0) {
+      await ctx.reply("ℹ️ You are already registered as an active rider.");
+      return true;
+    }
+
+    // 2. Validate code format (4 to 8 alphanumeric characters)
+    if (!/^\d{4,8}$/.test(cleanCode)) {
+      return false;
+    }
+
+    // 3. Find pending rider record matching this single-use secret code
+    const riderRes = await dbClient.execute({
+      sql: "SELECT * FROM riders WHERE secret_code = ? AND active = 1 AND (telegram_id IS NULL OR telegram_id = 0)",
       args: [cleanCode],
     });
     const rider = riderRes.rows[0];
 
     if (!rider) return false;
 
-    await db.execute({
-      sql: "UPDATE riders SET telegram_id = ? WHERE id = ?",
+    // 4. Atomic claim: bind telegram_id and consume secret_code so it cannot be reused
+    const updateRes = await dbClient.execute({
+      sql: "UPDATE riders SET telegram_id = ?, secret_code = NULL WHERE id = ? AND (telegram_id IS NULL OR telegram_id = 0)",
       args: [userId, Number(rider.id)],
     });
+
+    if (updateRes.rowsAffected !== 1) {
+      return false;
+    }
 
     userState.set(userId, {
       isRider: true,
@@ -85,7 +111,7 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     const success = await activateRiderHelper(ctx, code);
     if (!success) {
-      return ctx.reply("❌ Rider not found or inactive. Please check your activation code with the admin.");
+      return ctx.reply("❌ Invalid or expired activation code. Please check with your administrator.");
     }
   });
 
@@ -98,8 +124,15 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     const text = ctx.message?.text ?? "";
     const parts = text.split(/\s+/);
     if (parts.length >= 2 && parts[1]) {
-      const activated = await activateRiderHelper(ctx, parts[1].trim());
-      if (activated) return;
+      const isAlreadyRider = (await db.execute({
+        sql: "SELECT id FROM riders WHERE telegram_id = ? AND active = 1",
+        args: [userId],
+      })).rows.length > 0;
+
+      if (!isAlreadyRider) {
+        const activated = await activateRiderHelper(ctx, parts[1].trim());
+        if (activated) return;
+      }
     }
 
     try {
@@ -197,12 +230,6 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       // Skip commands (let Telegraf command handlers process them)
       if (trimmed.startsWith("/")) {
         return next();
-      }
-
-      // Check if text is a standalone 4-digit code (e.g., 8295) for rider activation
-      if (/^\d{4}$/.test(trimmed)) {
-        const activated = await activateRiderHelper(ctx, trimmed);
-        if (activated) return;
       }
     }
 
