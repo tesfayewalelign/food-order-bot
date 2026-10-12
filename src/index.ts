@@ -3,7 +3,7 @@ dns.setDefaultResultOrder("ipv4first");
 
 import { Telegraf, Context } from "telegraf";
 import dotenv from "dotenv";
-import express from "express";
+import express, { Request, Response } from "express";
 
 dotenv.config();
 
@@ -63,7 +63,7 @@ if (webhookConfig.isProduction) {
     })
   );
 
-  app.get("/", (req, res) => {
+  app.get("/", (req: Request, res: Response) => {
     res.send("🤖 Bot is running via webhook!");
   });
 
@@ -93,7 +93,7 @@ if (webhookConfig.isProduction) {
     });
   });
 
-  app.get("/", (req, res) => {
+  app.get("/", (req: Request, res: Response) => {
     res.send("🤖 Bot is running locally via polling!");
   });
 
