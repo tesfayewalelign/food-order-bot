@@ -51,12 +51,17 @@ bot.catch((err: any, ctx: Context) => {
   ctx.reply("⚠️ An unexpected error occurred. Please try again.").catch(() => {});
 });
 
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-const isProduction = process.env.NODE_ENV === "production" && WEBHOOK_URL;
+import { validateWebhookConfig } from "./config/webhookConfig.js";
 
-if (isProduction) {
+const webhookConfig = validateWebhookConfig();
+
+if (webhookConfig.isProduction) {
   app.use(express.json());
-  app.use(bot.webhookCallback("/webhook"));
+  app.use(
+    bot.webhookCallback("/webhook", {
+      secretToken: webhookConfig.secretToken,
+    })
+  );
 
   app.get("/", (req, res) => {
     res.send("🤖 Bot is running via webhook!");
@@ -66,8 +71,10 @@ if (isProduction) {
     console.log(`🌐 Server running on port ${PORT}`);
 
     try {
-      await bot.telegram.setWebhook(WEBHOOK_URL!);
-      console.log("✅ Webhook set:", WEBHOOK_URL);
+      await bot.telegram.setWebhook(webhookConfig.webhookUrl!, {
+        secret_token: webhookConfig.secretToken,
+      });
+      console.log("✅ Webhook set securely with secret token validation:", webhookConfig.webhookUrl);
     } catch (err) {
       console.error("❌ Failed to set webhook:", err);
     }

@@ -1,20 +1,71 @@
-import { createClient } from "@libsql/client";
+import { createClient, Client } from "@libsql/client";
 import dotenv from "dotenv";
 import dns from "dns";
 
 dns.setDefaultResultOrder("ipv4first");
 dotenv.config();
 
-const url = process.env.TURSO_DATABASE_URL || "file:dev.db";
-const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
+export interface DbConfig {
+  url: string;
+  authToken?: string;
+  isProduction: boolean;
+}
+
+export function validateDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
+  const isProduction = env.NODE_ENV === "production";
+
+  if (isProduction) {
+    const rawUrl = env.TURSO_DATABASE_URL?.trim();
+    const rawToken = env.TURSO_AUTH_TOKEN?.trim();
+
+    if (!rawUrl) {
+      throw new Error(
+        "CRITICAL DATABASE CONFIGURATION ERROR: TURSO_DATABASE_URL is required when NODE_ENV=production. Silent fallback to local SQLite (file:dev.db) is strictly prohibited in production."
+      );
+    }
+
+    if (rawUrl.startsWith("file:")) {
+      throw new Error(
+        "CRITICAL DATABASE CONFIGURATION ERROR: TURSO_DATABASE_URL cannot use a local file: URI when NODE_ENV=production. A remote Turso database URL (e.g. libsql://...) is required."
+      );
+    }
+
+    if (!rawToken) {
+      throw new Error(
+        "CRITICAL DATABASE CONFIGURATION ERROR: TURSO_AUTH_TOKEN is required when NODE_ENV=production."
+      );
+    }
+
+    return {
+      url: rawUrl,
+      authToken: rawToken,
+      isProduction: true,
+    };
+  }
+
+  // Development / test fallback
+  return {
+    url: env.TURSO_DATABASE_URL?.trim() || "file:dev.db",
+    authToken: env.TURSO_AUTH_TOKEN?.trim() || undefined,
+    isProduction: false,
+  };
+}
+
+const dbConfig = validateDbConfig();
 
 export const db = createClient({
-  url,
-  authToken,
+  url: dbConfig.url,
+  authToken: dbConfig.authToken,
 });
 
-export async function initDb() {
-  await db.batch([
+export interface InitDbOptions {
+  isProduction?: boolean;
+}
+
+export async function initDb(targetDb: Client = db, options: InitDbOptions = {}) {
+  const isProduction = options.isProduction ?? (process.env.NODE_ENV === "production");
+
+  await targetDb.batch([
     `CREATE TABLE IF NOT EXISTS profiles (
       telegram_id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -189,58 +240,21 @@ export async function initDb() {
     );`
   ]);
 
-  try { await db.execute("ALTER TABLE restaurants ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
-  try { await db.execute("ALTER TABLE foods ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
-  try { await db.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
-  try { await db.execute("ALTER TABLE orders ADD COLUMN delivery_price_per_food REAL DEFAULT 0"); } catch(e) {}
-  try { await db.execute("ALTER TABLE contract_requests ADD COLUMN username TEXT"); } catch(e) {}
+  try { await targetDb.execute("ALTER TABLE restaurants ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
+  try { await targetDb.execute("ALTER TABLE foods ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
+  try { await targetDb.execute("ALTER TABLE complaints ADD COLUMN status TEXT DEFAULT 'pending'"); } catch(e) {}
+  try { await targetDb.execute("ALTER TABLE orders ADD COLUMN delivery_price_per_food REAL DEFAULT 0"); } catch(e) {}
+  try { await targetDb.execute("ALTER TABLE contract_requests ADD COLUMN username TEXT"); } catch(e) {}
 
-  // Seed default special order settings if missing
-  await db.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('min_delivery_fee', '50')");
-  await db.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('price_per_km', '20')");
+  // 1. Seed operational configuration settings (required in all environments)
+  await targetDb.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('min_delivery_fee', '50')");
+  await targetDb.execute("INSERT OR IGNORE INTO special_order_settings (key, value) VALUES ('price_per_km', '20')");
 
-  // Seed sample special restaurants if empty
-  const specRestCheck = await db.execute("SELECT COUNT(*) as count FROM special_restaurants");
-  const specRestCount = Number(specRestCheck.rows[0]?.count ?? 0);
-  if (specRestCount === 0) {
-    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Mountain Restaurant')");
-    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Pizza House')");
-    await db.execute("INSERT INTO special_restaurants (name) VALUES ('Burger House')");
-
-    const mountainRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Mountain Restaurant'");
-    const mountainId = Number(mountainRes.rows[0]?.id);
-    if (mountainId) {
-      await db.batch([
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Piassa"] },
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Menahariya"] },
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Hayk"] },
-      ]);
-    }
-
-    const pizzaRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Pizza House'");
-    const pizzaId = Number(pizzaRes.rows[0]?.id);
-    if (pizzaId) {
-      await db.batch([
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Gibi Fit Lefit"] },
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Mobil Atote"] },
-      ]);
-    }
-
-    const burgerRes = await db.execute("SELECT id FROM special_restaurants WHERE name = 'Burger House'");
-    const burgerId = Number(burgerRes.rows[0]?.id);
-    if (burgerId) {
-      await db.batch([
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Trufat"] },
-        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Piassa"] },
-      ]);
-    }
-  }
-
-  // Seed default campus delivery prices if empty
-  const dpCheck = await db.execute("SELECT COUNT(*) as count FROM delivery_pricing");
+  // Seed default campus delivery prices if empty (required baseline for pricing calculation)
+  const dpCheck = await targetDb.execute("SELECT COUNT(*) as count FROM delivery_pricing");
   const dpCount = Number(dpCheck.rows[0]?.count ?? 0);
   if (dpCount === 0) {
-    await db.batch([
+    await targetDb.batch([
       { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_boys_whites_house", 10] },
       { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_boys_africa", 15] },
       { sql: "INSERT INTO delivery_pricing (campus, restaurant_id, price_per_food) VALUES (?, NULL, ?)", args: ["campus_main_girls_white_house", 10] },
@@ -251,11 +265,59 @@ export async function initDb() {
     ]);
   }
 
+  // 2. Demo data seeding (Skipped in production)
+  if (isProduction) {
+    console.log("ℹ️ Production environment: Skipping demo restaurants and sample food items seeding.");
+  } else {
+    await seedDemoData(targetDb);
+  }
+
+  console.log("✅ Database initialized successfully (SQLite/Turso)");
+}
+
+export async function seedDemoData(targetDb: Client = db) {
+  // Seed sample special restaurants if empty
+  const specRestCheck = await targetDb.execute("SELECT COUNT(*) as count FROM special_restaurants");
+  const specRestCount = Number(specRestCheck.rows[0]?.count ?? 0);
+  if (specRestCount === 0) {
+    await targetDb.execute("INSERT INTO special_restaurants (name) VALUES ('Mountain Restaurant')");
+    await targetDb.execute("INSERT INTO special_restaurants (name) VALUES ('Pizza House')");
+    await targetDb.execute("INSERT INTO special_restaurants (name) VALUES ('Burger House')");
+
+    const mountainRes = await targetDb.execute("SELECT id FROM special_restaurants WHERE name = 'Mountain Restaurant'");
+    const mountainId = Number(mountainRes.rows[0]?.id);
+    if (mountainId) {
+      await targetDb.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Piassa"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Menahariya"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [mountainId, "Hayk"] },
+      ]);
+    }
+
+    const pizzaRes = await targetDb.execute("SELECT id FROM special_restaurants WHERE name = 'Pizza House'");
+    const pizzaId = Number(pizzaRes.rows[0]?.id);
+    if (pizzaId) {
+      await targetDb.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Gibi Fit Lefit"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [pizzaId, "Mobil Atote"] },
+      ]);
+    }
+
+    const burgerRes = await targetDb.execute("SELECT id FROM special_restaurants WHERE name = 'Burger House'");
+    const burgerId = Number(burgerRes.rows[0]?.id);
+    if (burgerId) {
+      await targetDb.batch([
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Trufat"] },
+        { sql: "INSERT INTO special_restaurant_locations (special_restaurant_id, location_name) VALUES (?, ?)", args: [burgerId, "Piassa"] },
+      ]);
+    }
+  }
+
   // Seed sample restaurants if empty
-  const restCheck = await db.execute("SELECT COUNT(*) as count FROM restaurants");
+  const restCheck = await targetDb.execute("SELECT COUNT(*) as count FROM restaurants");
   const count = Number(restCheck.rows[0]?.count ?? 0);
   if (count === 0) {
-    await db.batch([
+    await targetDb.batch([
       { sql: "INSERT INTO restaurants (name) VALUES (?)", args: ["Askuala"] },
       { sql: "INSERT INTO restaurants (name) VALUES (?)", args: ["Fike"] },
       { sql: "INSERT INTO restaurants (name) VALUES (?)", args: ["Mesi"] },
@@ -263,16 +325,14 @@ export async function initDb() {
       { sql: "INSERT INTO restaurants (name) VALUES (?)", args: ["Shewit"] },
     ]);
 
-    const r1 = await db.execute("SELECT id FROM restaurants WHERE name = 'Askuala'");
+    const r1 = await targetDb.execute("SELECT id FROM restaurants WHERE name = 'Askuala'");
     const r1Id = Number(r1.rows[0]?.id);
     if (r1Id) {
-      await db.batch([
+      await targetDb.batch([
         { sql: "INSERT INTO foods (restaurant_id, name, price) VALUES (?, ?, ?)", args: [r1Id, "Special Shiro", 120] },
         { sql: "INSERT INTO foods (restaurant_id, name, price) VALUES (?, ?, ?)", args: [r1Id, "Beef Tibs", 250] },
         { sql: "INSERT INTO foods (restaurant_id, name, price) VALUES (?, ?, ?)", args: [r1Id, "Pasta with Meat", 150] },
       ]);
     }
   }
-
-  console.log("✅ Database initialized successfully (SQLite/Turso)");
 }
