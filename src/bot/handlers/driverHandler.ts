@@ -254,8 +254,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
           .join("\n");
 
         const telLink = formatPhoneLink(String(so.phone));
-        const telNorm = normalizePhone(String(so.phone));
-        const phoneLinkHtml = telNorm ? `<a href="tel:${telNorm}">${escapeHTML(telLink)}</a>` : escapeHTML(telLink);
+        const phoneLinkHtml = `<code>${escapeHTML(telLink)}</code>`;
 
         const msgText =
           `⭐ <b>SPECIAL DELIVERY #${so.id}</b>\n\n` +

@@ -150,7 +150,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action("admin_back", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     if (ctx.callbackQuery) {
       await ctx.editMessageText("*🛡️ Welcome to Admin Control Center*", {
@@ -257,9 +257,9 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
           await ctx.reply(
             `✅ Rider *${name}* added!\n\n` +
-              `🔑 Activation Code: \`${secretCode}\`\n\n` +
-              `Tell the rider to send in Telegram:\n` +
-              `\`/activate ${secretCode}\` or just send \`${secretCode}\``,
+            `🔑 Activation Code: \`${secretCode}\`\n\n` +
+            `Tell the rider to send in Telegram:\n` +
+            `\`/activate ${secretCode}\` or just send \`${secretCode}\``,
             { parse_mode: "Markdown" }
           );
           adminStates.delete(adminId);
@@ -449,7 +449,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- DASHBOARD ---
   bot.action("admin_dashboard", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showAdminDashboard(ctx);
   });
@@ -505,7 +505,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- RESTAURANTS MANAGEMENT ---
   bot.action("admin_restaurants", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showRestaurantsMenu(ctx);
   });
@@ -542,14 +542,14 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action("admin_add_restaurant", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     adminStates.set(ctx.from!.id, { action: "add_restaurant" });
     await ctx.reply("✏️ Type the name of the new restaurant:");
   });
 
   bot.action(/^admin_rest_view_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const restId = Number(ctx.match[1]);
 
@@ -587,7 +587,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_rest_toggle_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const restId = Number(ctx.match[1]);
 
@@ -609,7 +609,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_rest_edit_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const restId = Number(ctx.match[1]);
     adminStates.set(ctx.from!.id, { action: "edit_restaurant_name", restaurantId: restId });
@@ -618,7 +618,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- FOODS MANAGEMENT ---
   bot.action("admin_foods", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showFoodsRestaurantSelector(ctx);
   });
@@ -647,7 +647,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action(/^admin_foods_for_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const restId = Number(ctx.match[1]);
 
@@ -682,7 +682,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_add_food_to_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const restId = Number(ctx.match[1]);
     adminStates.set(ctx.from!.id, { action: "add_food", restaurantId: restId });
@@ -693,7 +693,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_food_view_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const foodId = Number(ctx.match[1]);
 
@@ -732,7 +732,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_food_toggle_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const foodId = Number(ctx.match[1]);
 
@@ -754,7 +754,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_food_price_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const foodId = Number(ctx.match[1]);
     adminStates.set(ctx.from!.id, { action: "edit_food_price", foodId });
@@ -763,7 +763,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- RIDERS MANAGEMENT ---
   bot.action("admin_riders", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showRidersMenu(ctx);
   });
@@ -813,7 +813,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action("admin_add_rider", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     adminStates.set(ctx.from!.id, { action: "add_rider" });
     await ctx.reply(
@@ -823,7 +823,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^admin_rider_toggle_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const riderId = Number(ctx.match[1]);
 
@@ -866,65 +866,61 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action("admin_orders", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
-    await showOrdersMenu(ctx, "all", 1);
+    await showOrdersMenu(ctx, "all");
   });
 
-  bot.action(/^admin_orders_filter_([a-z_]+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+  bot.action(/^admin_orders_filter_(.+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
-    const filter = ctx.match[1] || "all";
-    await showOrdersMenu(ctx, filter, 1);
+    const filter = (ctx.match && ctx.match[1]) ? String(ctx.match[1]) : "all";
+    await showOrdersMenu(ctx, filter);
   });
 
-  bot.action(/^admin_orders_page_([a-z_]+)_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
-    if (!(await requireAdmin(ctx))) return;
-    const filter = ctx.match[1] || "all";
-    const page = Number(ctx.match[2]) || 1;
-    await showOrdersMenu(ctx, filter, page);
-  });
-
-  bot.action(/^admin_order_view_(\d+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+  bot.action(/^admin_order_view_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const orderId = Number(ctx.match[1]);
-    const backFilter = ctx.match[2] || "all";
-    const backPage = Number(ctx.match[3]) || 1;
-    await showOrderDetail(ctx, orderId, backFilter, backPage);
+    await showOrderDetail(ctx, orderId);
   });
 
-  // Direct text commands: /order_30 or /order30 or /view_30
-  bot.hears(/^\/(?:order|view)_?(\d+)$/i, async (ctx) => {
+  // Direct text commands: /order_30 or /order 30 or /order30 or /view_30
+  bot.hears(/^\/(?:order|view)[_ ]?(\d+)$/i, async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const orderId = Number(ctx.match[1]);
-    await showOrderDetail(ctx, orderId, "all", 1);
+    await showOrderDetail(ctx, orderId);
   });
 
-  bot.action(/^admin_order_status_menu_(\d+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+  // Helpful hint if admin types /order or /order_id literally
+  bot.hears(/^\/(?:order|view)(?:_?id)?$/i, async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    await ctx.reply("ℹ️ Please provide an order number, for example: <code>/order_30</code> or <code>/order 30</code>", {
+      parse_mode: "HTML",
+    });
+  });
+
+  bot.action(/^admin_order_status_menu_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const orderId = Number(ctx.match[1]);
-    const backFilter = ctx.match[2] || "all";
-    const backPage = Number(ctx.match[3]) || 1;
 
     const text = `🔄 <b>Select New Status for Order #${orderId}:</b>`;
     const rows = [
       [
-        Markup.button.callback("⏳ Pending", `admin_order_set_status_${orderId}_pending_${backFilter}_${backPage}`),
-        Markup.button.callback("🚴 Accepted", `admin_order_set_status_${orderId}_accepted_${backFilter}_${backPage}`),
+        Markup.button.callback("⏳ Pending", `admin_order_set_status_${orderId}_pending`),
+        Markup.button.callback("🚴 Accepted", `admin_order_set_status_${orderId}_accepted`),
       ],
       [
-        Markup.button.callback("🚶 On the Way", `admin_order_set_status_${orderId}_on_the_way_${backFilter}_${backPage}`),
-        Markup.button.callback("📦 Picked Up", `admin_order_set_status_${orderId}_picked_up_${backFilter}_${backPage}`),
+        Markup.button.callback("🚶 On the Way", `admin_order_set_status_${orderId}_on_the_way`),
+        Markup.button.callback("📦 Picked Up", `admin_order_set_status_${orderId}_picked_up`),
       ],
       [
-        Markup.button.callback("✅ Delivered", `admin_order_set_status_${orderId}_delivered_${backFilter}_${backPage}`),
-        Markup.button.callback("❌ Cancelled", `admin_order_set_status_${orderId}_cancelled_${backFilter}_${backPage}`),
+        Markup.button.callback("✅ Delivered", `admin_order_set_status_${orderId}_delivered`),
+        Markup.button.callback("❌ Cancelled", `admin_order_set_status_${orderId}_cancelled`),
       ],
       [
-        Markup.button.callback("🔙 Back to Order Details", `admin_order_view_${orderId}_${backFilter}_${backPage}`),
+        Markup.button.callback("🔙 Back to Order Details", `admin_order_view_${orderId}`),
       ],
     ];
 
@@ -935,7 +931,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           reply_markup: Markup.inlineKeyboard(rows).reply_markup,
         });
         return;
-      } catch (e) {}
+      } catch (e) { }
     }
     await ctx.reply(text, {
       parse_mode: "HTML",
@@ -943,12 +939,10 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     });
   });
 
-  bot.action(/^admin_order_set_status_(\d+)_([a-z_]+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
+  bot.action(/^admin_order_set_status_(\d+)_([a-z_]+)$/, async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const orderId = Number(ctx.match[1]);
     const newStatus = String(ctx.match[2] || "pending");
-    const backFilter = String(ctx.match[3] || "all");
-    const backPage = Number(ctx.match[4] || 1);
 
     await db.execute({
       sql: "UPDATE orders SET status = ? WHERE id = ?",
@@ -974,27 +968,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           await ctx.telegram.sendMessage(Number(order.telegram_id), notifyMap[newStatus], { parse_mode: "Markdown" });
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
-    ctx.answerCbQuery(`✅ Status updated to: ${formatOrderStatusBadge(newStatus)}`).catch(() => {});
-    await showOrderDetail(ctx, orderId, backFilter, backPage);
+    ctx.answerCbQuery(`✅ Status updated to: ${formatOrderStatusBadge(newStatus)}`).catch(() => { });
+    await showOrderDetail(ctx, orderId);
   });
 
-  async function showOrdersMenu(ctx: Context, filter: string = "all", page: number = 1) {
-    const PAGE_SIZE = 15;
-
-    let countSql = "SELECT COUNT(*) as count FROM orders";
-    let countArgs: any[] = [];
-    if (filter !== "all") {
-      countSql += " WHERE status = ?";
-      countArgs.push(filter);
-    }
-    const countRes = await db.execute({ sql: countSql, args: countArgs });
-    const totalOrders = Number(countRes.rows[0]?.count || 0);
-    const totalPages = Math.max(1, Math.ceil(totalOrders / PAGE_SIZE));
-    const currentPage = Math.max(1, Math.min(page, totalPages));
-    const offset = (currentPage - 1) * PAGE_SIZE;
-
+  async function showOrdersMenu(ctx: Context, filter: string = "all") {
     let sql = "SELECT id, user_name, phone, campus, restaurant, total_price, status, created_at FROM orders";
     let args: any[] = [];
 
@@ -1003,99 +983,69 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       args.push(filter);
     }
 
-    sql += " ORDER BY id DESC LIMIT ? OFFSET ?";
-    args.push(PAGE_SIZE, offset);
+    sql += " ORDER BY id DESC LIMIT 15";
 
     const res = await db.execute({ sql, args });
     const orders = res.rows;
 
-    let text = `📋 <b>Orders Directory (${filter.toUpperCase()})</b>`;
-    if (totalPages > 1) {
-      text += ` <i>(Page ${currentPage}/${totalPages} • ${totalOrders} orders)</i>`;
-    }
-    text += `\n\n`;
-
+    let text = `📋 <b>Orders Directory (${filter.toUpperCase()}):</b>\n\n`;
     if (orders.length === 0) {
-      text += `<i>No orders found for this status.</i>\n`;
+      text += "No orders found for this status.\n";
     } else {
       orders.forEach((o: any, i: number) => {
-        const itemNumber = offset + i + 1;
         const dateStr = o.created_at ? new Date(o.created_at).toLocaleTimeString() : "Recent";
         const statusBadge = formatOrderStatusBadge(String(o.status));
-        text += `${itemNumber}. <b>Order #${o.id}</b> — ${escapeHTML(String(o.user_name))}\n`;
+        text += `${i + 1}. <b>Order #${o.id}</b> — ${escapeHTML(String(o.user_name))}\n`;
         text += `   🏢 ${escapeHTML(String(o.restaurant))} | 💰 ${o.total_price} ETB\n`;
         text += `   Status: <b>${statusBadge}</b> | Date: ${dateStr}\n`;
         text += `   👉 <i>View Details:</i> /order_${o.id}\n\n`;
       });
-      text += `👇 <i>Tap an order button below or click /order_ID to view details:</i>`;
+      text += `💡 <i>Tap any order button below or click /order_ID to view details:</i>`;
     }
 
     const buttons: any[] = [];
 
-    // Order action buttons (3 per row if > 6, otherwise 2 per row)
-    const perRow = orders.length > 6 ? 3 : 2;
-    for (let i = 0; i < orders.length; i += perRow) {
-      const row = orders.slice(i, i + perRow).map((o: any) => {
-        const rawName = String(o.user_name || "Customer").trim();
-        const shortName = rawName.length > 9 ? rawName.slice(0, 8) + "…" : rawName;
-        const displayLabel = perRow === 3
-          ? `#${o.id} ${shortName}`
-          : `🔍 #${o.id} — ${shortName}`;
-        return Markup.button.callback(
-          displayLabel,
-          `admin_order_view_${o.id}_${filter}_${currentPage}`
-        );
+    // Quick direct buttons for listed orders
+    if (orders.length > 0) {
+      const orderBtns: any[] = [];
+      orders.forEach((o: any) => {
+        orderBtns.push(Markup.button.callback(`🔍 #${o.id} View`, `admin_order_view_${o.id}`));
       });
-      buttons.push(row);
+      for (let i = 0; i < orderBtns.length; i += 3) {
+        buttons.push(orderBtns.slice(i, i + 3));
+      }
     }
 
-    // Pagination row
-    if (totalPages > 1) {
-      const pageRow: any[] = [];
-      if (currentPage > 1) {
-        pageRow.push(Markup.button.callback("⬅️ Prev", `admin_orders_page_${filter}_${currentPage - 1}`));
-      }
-      pageRow.push(Markup.button.callback(`📄 ${currentPage}/${totalPages}`, `admin_orders_page_${filter}_${currentPage}`));
-      if (currentPage < totalPages) {
-        pageRow.push(Markup.button.callback("Next ➡️", `admin_orders_page_${filter}_${currentPage + 1}`));
-      }
-      buttons.push(pageRow);
-    }
-
-    // Status filter buttons
     buttons.push([
-      Markup.button.callback(filter === "all" ? "• ALL •" : "All", "admin_orders_filter_all"),
+      Markup.button.callback(filter === "all" ? "• All •" : "All", "admin_orders_filter_all"),
       Markup.button.callback(filter === "pending" ? "• ⏳ Pending •" : "⏳ Pending", "admin_orders_filter_pending"),
       Markup.button.callback(filter === "accepted" ? "• 🚴 Accepted •" : "🚴 Accepted", "admin_orders_filter_accepted"),
     ]);
     buttons.push([
-      Markup.button.callback(filter === "on_the_way" ? "• 🚶 On Way •" : "🚶 On the Way", "admin_orders_filter_on_the_way"),
+      Markup.button.callback(filter === "on_the_way" ? "• 🚶 On the Way •" : "🚶 On the Way", "admin_orders_filter_on_the_way"),
       Markup.button.callback(filter === "picked_up" ? "• 📦 Picked •" : "📦 Picked Up", "admin_orders_filter_picked_up"),
       Markup.button.callback(filter === "delivered" ? "• ✅ Delivered •" : "✅ Delivered", "admin_orders_filter_delivered"),
     ]);
-    buttons.push([Markup.button.callback("🔙 Back to Admin", "admin_back")]);
+    buttons.push([Markup.button.callback("🔙 Back", "admin_back")]);
+
+    const keyboard = Markup.inlineKeyboard(buttons);
 
     if (ctx.callbackQuery) {
       try {
         await ctx.editMessageText(text, {
           parse_mode: "HTML",
-          reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+          reply_markup: keyboard.reply_markup,
         });
         return;
-      } catch (e) {}
+      } catch (e) { }
     }
     await ctx.reply(text, {
       parse_mode: "HTML",
-      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+      reply_markup: keyboard.reply_markup,
     });
   }
 
-  async function showOrderDetail(
-    ctx: Context,
-    orderId: number,
-    backFilter: string = "all",
-    backPage: number = 1
-  ) {
+  async function showOrderDetail(ctx: Context, orderId: number) {
     const orderRes = await db.execute({
       sql: `SELECT o.*, r.phone as rider_phone, r.name as rider_actual_name, r.telegram_id as rider_telegram_id
             FROM orders o
@@ -1108,7 +1058,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!order) {
       const notFoundText = `⚠️ <b>Order #${orderId} not found.</b>`;
       const kb = Markup.inlineKeyboard([
-        [Markup.button.callback("🔙 Back to Orders", `admin_orders_page_${backFilter}_${backPage}`)],
+        [Markup.button.callback("🔙 Back to Orders", "admin_orders")],
       ]);
       if (ctx.callbackQuery) {
         return ctx.editMessageText(notFoundText, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -1128,7 +1078,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           const qty = Number(it.quantity || 1);
           const price = Number(it.price_at_order || 0);
           const subtotal = qty * price;
-          return `• <b>${escapeHTML(String(it.food_name))}</b> × ${qty} — <b>${subtotal} ETB</b> <small>(${price} ETB ea)</small>`;
+          return `• <b>${escapeHTML(String(it.food_name))}</b> × ${qty} — <b>${subtotal} ETB</b> <i>(${price} ETB ea)</i>`;
         })
         .join("\n");
     } else if (order.foods_summary) {
@@ -1141,7 +1091,6 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
 
     const statusBadge = formatOrderStatusBadge(String(order.status));
-    const phoneNorm = normalizePhone(String(order.phone));
     const phoneDisplay = String(order.phone || "N/A");
     const dateFormatted = order.created_at ? new Date(String(order.created_at)).toLocaleString() : "Recent";
     const campusFormatted = formatCampusName(String(order.campus));
@@ -1154,7 +1103,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       `🕒 <b>Date & Time:</b> ${dateFormatted}\n\n` +
       `👤 <b>CUSTOMER INFORMATION</b>\n` +
       `• <b>Name:</b> ${escapeHTML(String(order.user_name))}\n` +
-      `• <b>Phone:</b> <a href="tel:${phoneNorm}">${escapeHTML(phoneDisplay)}</a>\n` +
+      `• <b>Phone:</b> <code>${escapeHTML(phoneDisplay)}</code>\n` +
       `• <b>Telegram ID:</b> <code>${order.telegram_id}</code>\n` +
       `• <b>Campus / Drop-off:</b> ${escapeHTML(campusFormatted)}\n\n` +
       `🏢 <b>RESTAURANT & MEAL</b>\n` +
@@ -1170,7 +1119,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       `• <b>Delivery Contract:</b> ${order.has_delivery_contract ? "✅ Covered by Contract" : "❌ No"}\n\n` +
       `🛵 <b>ASSIGNED RIDER / DELIVERY</b>\n` +
       `• <b>Rider:</b> ${riderName ? `<b>${escapeHTML(String(riderName))}</b>` : "⚠️ <i>Unassigned</i>"}\n` +
-      (order.rider_phone ? `• <b>Rider Phone:</b> <a href="tel:${normalizePhone(String(order.rider_phone))}">${escapeHTML(String(order.rider_phone))}</a>\n` : "") +
+      (order.rider_phone ? `• <b>Rider Phone:</b> <code>${escapeHTML(String(order.rider_phone))}</code>\n` : "") +
       `━━━━━━━━━━━━━━━━━━━━`;
 
     const rows: any[] = [];
@@ -1179,18 +1128,18 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     const curStatus = String(order.status || "pending").toLowerCase();
     const quickActions: any[] = [];
     if (curStatus === "pending") {
-      quickActions.push(Markup.button.callback("🚴 Accept", `admin_order_set_status_${order.id}_accepted_${backFilter}_${backPage}`));
-      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("🚴 Accept", `admin_order_set_status_${order.id}_accepted`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled`));
     } else if (curStatus === "accepted") {
-      quickActions.push(Markup.button.callback("🚶 On the Way", `admin_order_set_status_${order.id}_on_the_way_${backFilter}_${backPage}`));
-      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("🚶 On the Way", `admin_order_set_status_${order.id}_on_the_way`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled`));
     } else if (curStatus === "on_the_way") {
-      quickActions.push(Markup.button.callback("📦 Picked Up", `admin_order_set_status_${order.id}_picked_up_${backFilter}_${backPage}`));
-      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("📦 Picked Up", `admin_order_set_status_${order.id}_picked_up`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled`));
     } else if (curStatus === "picked_up") {
-      quickActions.push(Markup.button.callback("✅ Mark Delivered", `admin_order_set_status_${order.id}_delivered_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("✅ Mark Delivered", `admin_order_set_status_${order.id}_delivered`));
     } else if (curStatus === "delivered" || curStatus === "cancelled") {
-      quickActions.push(Markup.button.callback("🔄 Reopen as Pending", `admin_order_set_status_${order.id}_pending_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("🔄 Reopen as Pending", `admin_order_set_status_${order.id}_pending`));
     }
     if (quickActions.length > 0) {
       rows.push(quickActions);
@@ -1198,7 +1147,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
     // Change status menu button + Contact customer button
     const actionRow: any[] = [
-      Markup.button.callback("🔄 Change Status", `admin_order_status_menu_${order.id}_${backFilter}_${backPage}`),
+      Markup.button.callback("🔄 Change Status", `admin_order_status_menu_${order.id}`),
     ];
     if (order.telegram_id && Number(order.telegram_id) > 1000) {
       actionRow.push(Markup.button.url("💬 Chat Customer", `tg://user?id=${order.telegram_id}`));
@@ -1210,27 +1159,44 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
 
     rows.push([
-      Markup.button.callback("🔙 Back to Orders", `admin_orders_page_${backFilter}_${backPage}`),
+      Markup.button.callback("🔙 Back to Orders", "admin_orders"),
     ]);
 
-    if (ctx.callbackQuery) {
-      try {
+    const keyboard = Markup.inlineKeyboard(rows);
+
+    try {
+      if (ctx.callbackQuery) {
         await ctx.editMessageText(detailText, {
           parse_mode: "HTML",
-          reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+          reply_markup: keyboard.reply_markup,
         });
         return;
-      } catch (e) {}
+      }
+      await ctx.reply(detailText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard.reply_markup,
+      });
+    } catch (e) {
+      console.error("[showOrderDetail] HTML send error, falling back to clean text:", e);
+      // Safe fallback: strip tags in case Telegram rejects parsing
+      const plainText = detailText.replace(/<[^>]+>/g, "");
+      if (ctx.callbackQuery) {
+        try {
+          await ctx.editMessageText(plainText, {
+            reply_markup: keyboard.reply_markup,
+          });
+          return;
+        } catch (_) { }
+      }
+      await ctx.reply(plainText, {
+        reply_markup: keyboard.reply_markup,
+      });
     }
-    await ctx.reply(detailText, {
-      parse_mode: "HTML",
-      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
-    });
   }
 
   // --- CONTRACT REQUESTS MANAGEMENT ---
   bot.action("admin_contract_requests", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showContractRequestsMenu(ctx);
   });
@@ -1278,7 +1244,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action(/^admin_req_view_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const reqId = Number(ctx.match[1]);
 
@@ -1321,7 +1287,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // Contract Approval & Rejection Direct Actions
   bot.action(/^(?:admin_req_approve|approve_contract_req)_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const reqId = Number(ctx.match[1]);
 
@@ -1369,7 +1335,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           `🎉 *Food Contract Approved!*\n\nYour food contract request for *${r.restaurant_name || "Restaurant"}* (${DEFAULT_MEAL_ALLOWANCE} meals) has been approved by admin!`,
           { parse_mode: "Markdown" }
         );
-      } catch (e) {}
+      } catch (e) { }
     } else {
       // Check duplicate active contract first
       const hasActive = await hasActiveDeliveryContract(telegramId);
@@ -1393,7 +1359,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           `🎉 *Delivery Contract Approved!*\n\nYour delivery contract request (${DEFAULT_DELIVERY_ALLOWANCE} deliveries) has been approved by admin!`,
           { parse_mode: "Markdown" }
         );
-      } catch (e) {}
+      } catch (e) { }
     }
 
     await db.execute({
@@ -1405,7 +1371,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^(?:admin_req_reject|reject_contract_req)_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const reqId = Number(ctx.match[1]);
 
@@ -1422,7 +1388,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
           `❌ *Contract Request Declined*\n\nYour contract request was declined by admin. Please contact support if you have any questions.`,
           { parse_mode: "Markdown" }
         );
-      } catch (e) {}
+      } catch (e) { }
     }
 
     await db.execute({
@@ -1434,7 +1400,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- COMPLAINTS MANAGEMENT ---
   bot.action("admin_complaints", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showComplaintsMenu(ctx);
   });
@@ -1489,7 +1455,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action(/^admin_complaint_resolve_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const cid = Number(ctx.match[1]);
 
@@ -1504,7 +1470,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- SETTINGS ---
   bot.action("admin_settings", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showSettingsMenu(ctx);
   });
@@ -1660,25 +1626,25 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   }
 
   bot.action("admin_delivery_pricing", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showDeliveryPricingMenu(ctx);
   });
 
   bot.action("admin_delivery_campus", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showCampusPricesMenu(ctx);
   });
 
   bot.action("admin_delivery_restaurant", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showRestaurantPricesMenu(ctx);
   });
 
   bot.action(/^set_campus_dp_(.+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     const campusKey = ctx.match[1];
@@ -1695,7 +1661,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action("admin_add_restaurant_price", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
 
     const restRes = await db.execute("SELECT id, name FROM restaurants WHERE (active IS NULL OR active = 1) ORDER BY name ASC");
@@ -1718,7 +1684,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^sel_rest_dp_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
 
     const restaurantId = Number(ctx.match[1]);
@@ -1748,7 +1714,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^sel_camp_dp_(\d+)_(.+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
 
     const adminId = ctx.from!.id;
@@ -1774,7 +1740,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^del_dp_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
 
     const id = Number(ctx.match[1]);
@@ -1791,13 +1757,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action("admin_special_orders", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showSpecialOrdersMenu(ctx);
   });
 
   bot.action(/^so_admin_view_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_view_(\d+)$/);
@@ -1806,7 +1772,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_set_item_price_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     const data = getCallbackData(ctx);
@@ -1834,7 +1800,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_set_dist_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     const data = getCallbackData(ctx);
@@ -1853,7 +1819,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_confirm_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_confirm_(\d+)$/);
@@ -1921,7 +1887,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_reject_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_reject_(\d+)$/);
@@ -1960,13 +1926,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action("admin_special_restaurants", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showSpecialRestaurantsMenu(ctx);
   });
 
   bot.action("so_admin_add_restaurant", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     adminStates.set(adminId, { action: "so_admin_add_restaurant" });
@@ -1974,7 +1940,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_toggle_rest_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_toggle_rest_(\d+)$/);
@@ -1990,7 +1956,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_manage_locs_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_manage_locs_(\d+)$/);
@@ -1999,7 +1965,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_add_loc_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     const data = getCallbackData(ctx);
@@ -2012,7 +1978,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action(/^so_admin_toggle_loc_(\d+)_(\d+)$/, async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const data = getCallbackData(ctx);
     const match = data?.match(/^so_admin_toggle_loc_(\d+)_(\d+)$/);
@@ -2030,13 +1996,13 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   // --- SPECIAL ORDER SETTINGS ---
   bot.action("admin_so_settings", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     await showSpecialOrderSettingsMenu(ctx);
   });
 
   bot.action("so_admin_edit_min_fee", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     adminStates.set(adminId, { action: "so_admin_edit_min_fee" });
@@ -2044,7 +2010,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   bot.action("so_admin_edit_price_km", async (ctx) => {
-    ctx.answerCbQuery().catch(() => {});
+    ctx.answerCbQuery().catch(() => { });
     if (!(await requireAdmin(ctx))) return;
     const adminId = ctx.from!.id;
     adminStates.set(adminId, { action: "so_admin_edit_price_km" });
@@ -2178,21 +2144,21 @@ async function showSpecialOrderDetails(ctx: Context, orderId: number) {
     order.status === "submitted"
       ? "⏳ Waiting for Admin Review"
       : order.status === "admin_confirmed"
-      ? "📩 Waiting for Customer Confirmation"
-      : order.status === "ready_for_delivery"
-      ? "🚚 Ready for Delivery"
-      : order.status === "accepted"
-      ? "🛵 Accepted by Rider"
-      : order.status === "admin_rejected"
-      ? "❌ Rejected by Admin"
-      : order.status === "customer_cancelled"
-      ? "❌ Cancelled by Customer"
-      : order.status;
+        ? "📩 Waiting for Customer Confirmation"
+        : order.status === "ready_for_delivery"
+          ? "🚚 Ready for Delivery"
+          : order.status === "accepted"
+            ? "🛵 Accepted by Rider"
+            : order.status === "admin_rejected"
+              ? "❌ Rejected by Admin"
+              : order.status === "customer_cancelled"
+                ? "❌ Cancelled by Customer"
+                : order.status;
 
   const msgText =
     `⭐ <b>SPECIAL ORDER #${order.id}</b>\n\n` +
     `👤 <b>Customer:</b> ${escapeHTML(String(order.user_name))}\n` +
-    `📞 <b>Phone:</b> <a href="tel:${normalizePhone(String(order.phone))}">${escapeHTML(String(order.phone))}</a>\n` +
+    `📞 <b>Phone:</b> <code>${escapeHTML(String(order.phone))}</code>\n` +
     `🏫 <b>Delivery Campus:</b> ${escapeHTML(formatCampusName(String(order.campus)))}\n\n` +
     `🏪 <b>Restaurant:</b> ${escapeHTML(String(order.restaurant_name))}\n` +
     `📍 <b>Restaurant Location:</b> ${escapeHTML(String(order.restaurant_location))}\n\n` +

@@ -26,11 +26,7 @@ function normalizePhone(phone?: string): string {
 function formatPhoneLinkHTML(phone?: string): string {
   if (!phone) return "N/A";
   const raw = phone.trim();
-  const tel = normalizePhone(raw);
-  if (tel) {
-    return `<a href="tel:${tel}">${escapeHTML(raw)}</a>`;
-  }
-  return escapeHTML(raw);
+  return `<code>${escapeHTML(raw)}</code>`;
 }
 
 function formatCampusName(campus?: string): string {
