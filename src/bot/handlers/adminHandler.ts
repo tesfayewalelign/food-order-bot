@@ -845,20 +845,156 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
   });
 
   // --- ORDERS MANAGEMENT & STATUS FILTER ---
+  function formatOrderStatusBadge(status?: string): string {
+    switch (String(status || "").toLowerCase()) {
+      case "pending":
+        return "⏳ Pending";
+      case "accepted":
+        return "🚴 Accepted";
+      case "on_the_way":
+        return "🚶 On the Way";
+      case "picked_up":
+        return "📦 Picked Up";
+      case "delivered":
+        return "✅ Delivered";
+      case "cancelled":
+      case "rejected":
+        return "❌ Cancelled";
+      default:
+        return status ? String(status) : "Unknown";
+    }
+  }
+
   bot.action("admin_orders", async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
     if (!(await requireAdmin(ctx))) return;
-    await showOrdersMenu(ctx, "all");
+    await showOrdersMenu(ctx, "all", 1);
   });
 
-  bot.action(/^admin_orders_filter_(.+)$/, async (ctx) => {
+  bot.action(/^admin_orders_filter_([a-z_]+)$/, async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
     if (!(await requireAdmin(ctx))) return;
-    const filter = (ctx.match && ctx.match[1]) ? String(ctx.match[1]) : "all";
-    await showOrdersMenu(ctx, filter);
+    const filter = ctx.match[1] || "all";
+    await showOrdersMenu(ctx, filter, 1);
   });
 
-  async function showOrdersMenu(ctx: Context, filter: string) {
+  bot.action(/^admin_orders_page_([a-z_]+)_(\d+)$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const filter = ctx.match[1] || "all";
+    const page = Number(ctx.match[2]) || 1;
+    await showOrdersMenu(ctx, filter, page);
+  });
+
+  bot.action(/^admin_order_view_(\d+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const orderId = Number(ctx.match[1]);
+    const backFilter = ctx.match[2] || "all";
+    const backPage = Number(ctx.match[3]) || 1;
+    await showOrderDetail(ctx, orderId, backFilter, backPage);
+  });
+
+  // Direct text commands: /order_30 or /order30 or /view_30
+  bot.hears(/^\/(?:order|view)_?(\d+)$/i, async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    const orderId = Number(ctx.match[1]);
+    await showOrderDetail(ctx, orderId, "all", 1);
+  });
+
+  bot.action(/^admin_order_status_menu_(\d+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
+    ctx.answerCbQuery().catch(() => {});
+    if (!(await requireAdmin(ctx))) return;
+    const orderId = Number(ctx.match[1]);
+    const backFilter = ctx.match[2] || "all";
+    const backPage = Number(ctx.match[3]) || 1;
+
+    const text = `🔄 <b>Select New Status for Order #${orderId}:</b>`;
+    const rows = [
+      [
+        Markup.button.callback("⏳ Pending", `admin_order_set_status_${orderId}_pending_${backFilter}_${backPage}`),
+        Markup.button.callback("🚴 Accepted", `admin_order_set_status_${orderId}_accepted_${backFilter}_${backPage}`),
+      ],
+      [
+        Markup.button.callback("🚶 On the Way", `admin_order_set_status_${orderId}_on_the_way_${backFilter}_${backPage}`),
+        Markup.button.callback("📦 Picked Up", `admin_order_set_status_${orderId}_picked_up_${backFilter}_${backPage}`),
+      ],
+      [
+        Markup.button.callback("✅ Delivered", `admin_order_set_status_${orderId}_delivered_${backFilter}_${backPage}`),
+        Markup.button.callback("❌ Cancelled", `admin_order_set_status_${orderId}_cancelled_${backFilter}_${backPage}`),
+      ],
+      [
+        Markup.button.callback("🔙 Back to Order Details", `admin_order_view_${orderId}_${backFilter}_${backPage}`),
+      ],
+    ];
+
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, {
+          parse_mode: "HTML",
+          reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+        });
+        return;
+      } catch (e) {}
+    }
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
+  });
+
+  bot.action(/^admin_order_set_status_(\d+)_([a-z_]+)(?:_([a-z_]+))?(?:_(\d+))?$/, async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    const orderId = Number(ctx.match[1]);
+    const newStatus = String(ctx.match[2] || "pending");
+    const backFilter = String(ctx.match[3] || "all");
+    const backPage = Number(ctx.match[4] || 1);
+
+    await db.execute({
+      sql: "UPDATE orders SET status = ? WHERE id = ?",
+      args: [newStatus, orderId],
+    });
+
+    // Notify customer if they have telegram_id
+    try {
+      const orderRes = await db.execute({
+        sql: "SELECT telegram_id FROM orders WHERE id = ?",
+        args: [orderId],
+      });
+      const order = orderRes.rows[0];
+      if (order && order.telegram_id && Number(order.telegram_id) > 1000) {
+        const notifyMap: Record<string, string> = {
+          accepted: `🛵 *Your Order #${orderId} has been accepted!*`,
+          on_the_way: `🚶 *Your Order #${orderId} is now on the way!*`,
+          picked_up: `📦 *Your Order #${orderId} has been picked up from the restaurant!*`,
+          delivered: `🎉 *Your Order #${orderId} has been delivered! Enjoy your meal!*`,
+          cancelled: `❌ *Your Order #${orderId} was cancelled by the administrator.*`,
+        };
+        if (notifyMap[newStatus]) {
+          await ctx.telegram.sendMessage(Number(order.telegram_id), notifyMap[newStatus], { parse_mode: "Markdown" });
+        }
+      }
+    } catch (e) {}
+
+    ctx.answerCbQuery(`✅ Status updated to: ${formatOrderStatusBadge(newStatus)}`).catch(() => {});
+    await showOrderDetail(ctx, orderId, backFilter, backPage);
+  });
+
+  async function showOrdersMenu(ctx: Context, filter: string = "all", page: number = 1) {
+    const PAGE_SIZE = 15;
+
+    let countSql = "SELECT COUNT(*) as count FROM orders";
+    let countArgs: any[] = [];
+    if (filter !== "all") {
+      countSql += " WHERE status = ?";
+      countArgs.push(filter);
+    }
+    const countRes = await db.execute({ sql: countSql, args: countArgs });
+    const totalOrders = Number(countRes.rows[0]?.count || 0);
+    const totalPages = Math.max(1, Math.ceil(totalOrders / PAGE_SIZE));
+    const currentPage = Math.max(1, Math.min(page, totalPages));
+    const offset = (currentPage - 1) * PAGE_SIZE;
+
     let sql = "SELECT id, user_name, phone, campus, restaurant, total_price, status, created_at FROM orders";
     let args: any[] = [];
 
@@ -867,47 +1003,229 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       args.push(filter);
     }
 
-    sql += " ORDER BY id DESC LIMIT 15";
+    sql += " ORDER BY id DESC LIMIT ? OFFSET ?";
+    args.push(PAGE_SIZE, offset);
 
     const res = await db.execute({ sql, args });
     const orders = res.rows;
 
-    let text = `📋 *Orders Directory (${filter.toUpperCase()}):*\n\n`;
+    let text = `📋 <b>Orders Directory (${filter.toUpperCase()})</b>`;
+    if (totalPages > 1) {
+      text += ` <i>(Page ${currentPage}/${totalPages} • ${totalOrders} orders)</i>`;
+    }
+    text += `\n\n`;
+
     if (orders.length === 0) {
-      text += "No orders found for this status.\n";
+      text += `<i>No orders found for this status.</i>\n`;
     } else {
       orders.forEach((o: any, i: number) => {
-        text += `${i + 1}. *Order #${o.id}* — ${o.user_name}\n`;
-        text += `   🏢 ${o.restaurant} | 💰 ${o.total_price} ETB\n`;
-        text += `   Status: *${o.status}* | Date: ${o.created_at ? new Date(o.created_at).toLocaleTimeString() : "Recent"}\n\n`;
+        const itemNumber = offset + i + 1;
+        const dateStr = o.created_at ? new Date(o.created_at).toLocaleTimeString() : "Recent";
+        const statusBadge = formatOrderStatusBadge(String(o.status));
+        text += `${itemNumber}. <b>Order #${o.id}</b> — ${escapeHTML(String(o.user_name))}\n`;
+        text += `   🏢 ${escapeHTML(String(o.restaurant))} | 💰 ${o.total_price} ETB\n`;
+        text += `   Status: <b>${statusBadge}</b> | Date: ${dateStr}\n`;
+        text += `   👉 <i>View Details:</i> /order_${o.id}\n\n`;
       });
+      text += `👇 <i>Tap an order button below or click /order_ID to view details:</i>`;
     }
 
-    const filterKeyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback("All", "admin_orders_filter_all"),
-        Markup.button.callback("⏳ Pending", "admin_orders_filter_pending"),
-        Markup.button.callback("🚴 Accepted", "admin_orders_filter_accepted"),
-      ],
-      [
-        Markup.button.callback("🚶 On the Way", "admin_orders_filter_on_the_way"),
-        Markup.button.callback("📦 Picked Up", "admin_orders_filter_picked_up"),
-        Markup.button.callback("✅ Delivered", "admin_orders_filter_delivered"),
-      ],
-      [Markup.button.callback("🔙 Back", "admin_back")],
+    const buttons: any[] = [];
+
+    // Order action buttons (3 per row if > 6, otherwise 2 per row)
+    const perRow = orders.length > 6 ? 3 : 2;
+    for (let i = 0; i < orders.length; i += perRow) {
+      const row = orders.slice(i, i + perRow).map((o: any) => {
+        const rawName = String(o.user_name || "Customer").trim();
+        const shortName = rawName.length > 9 ? rawName.slice(0, 8) + "…" : rawName;
+        const displayLabel = perRow === 3
+          ? `#${o.id} ${shortName}`
+          : `🔍 #${o.id} — ${shortName}`;
+        return Markup.button.callback(
+          displayLabel,
+          `admin_order_view_${o.id}_${filter}_${currentPage}`
+        );
+      });
+      buttons.push(row);
+    }
+
+    // Pagination row
+    if (totalPages > 1) {
+      const pageRow: any[] = [];
+      if (currentPage > 1) {
+        pageRow.push(Markup.button.callback("⬅️ Prev", `admin_orders_page_${filter}_${currentPage - 1}`));
+      }
+      pageRow.push(Markup.button.callback(`📄 ${currentPage}/${totalPages}`, `admin_orders_page_${filter}_${currentPage}`));
+      if (currentPage < totalPages) {
+        pageRow.push(Markup.button.callback("Next ➡️", `admin_orders_page_${filter}_${currentPage + 1}`));
+      }
+      buttons.push(pageRow);
+    }
+
+    // Status filter buttons
+    buttons.push([
+      Markup.button.callback(filter === "all" ? "• ALL •" : "All", "admin_orders_filter_all"),
+      Markup.button.callback(filter === "pending" ? "• ⏳ Pending •" : "⏳ Pending", "admin_orders_filter_pending"),
+      Markup.button.callback(filter === "accepted" ? "• 🚴 Accepted •" : "🚴 Accepted", "admin_orders_filter_accepted"),
+    ]);
+    buttons.push([
+      Markup.button.callback(filter === "on_the_way" ? "• 🚶 On Way •" : "🚶 On the Way", "admin_orders_filter_on_the_way"),
+      Markup.button.callback(filter === "picked_up" ? "• 📦 Picked •" : "📦 Picked Up", "admin_orders_filter_picked_up"),
+      Markup.button.callback(filter === "delivered" ? "• ✅ Delivered •" : "✅ Delivered", "admin_orders_filter_delivered"),
+    ]);
+    buttons.push([Markup.button.callback("🔙 Back to Admin", "admin_back")]);
+
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, {
+          parse_mode: "HTML",
+          reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+        });
+        return;
+      } catch (e) {}
+    }
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+    });
+  }
+
+  async function showOrderDetail(
+    ctx: Context,
+    orderId: number,
+    backFilter: string = "all",
+    backPage: number = 1
+  ) {
+    const orderRes = await db.execute({
+      sql: `SELECT o.*, r.phone as rider_phone, r.name as rider_actual_name, r.telegram_id as rider_telegram_id
+            FROM orders o
+            LEFT JOIN riders r ON o.rider_id = r.id
+            WHERE o.id = ?`,
+      args: [orderId],
+    });
+    const order = orderRes.rows[0];
+
+    if (!order) {
+      const notFoundText = `⚠️ <b>Order #${orderId} not found.</b>`;
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("🔙 Back to Orders", `admin_orders_page_${backFilter}_${backPage}`)],
+      ]);
+      if (ctx.callbackQuery) {
+        return ctx.editMessageText(notFoundText, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+      }
+      return ctx.reply(notFoundText, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+    }
+
+    const itemsRes = await db.execute({
+      sql: "SELECT food_name, quantity, price_at_order FROM order_items WHERE order_id = ? ORDER BY id ASC",
+      args: [orderId],
+    });
+
+    let itemsFormatted = "";
+    if (itemsRes.rows.length > 0) {
+      itemsFormatted = itemsRes.rows
+        .map((it: any) => {
+          const qty = Number(it.quantity || 1);
+          const price = Number(it.price_at_order || 0);
+          const subtotal = qty * price;
+          return `• <b>${escapeHTML(String(it.food_name))}</b> × ${qty} — <b>${subtotal} ETB</b> <small>(${price} ETB ea)</small>`;
+        })
+        .join("\n");
+    } else if (order.foods_summary) {
+      itemsFormatted = String(order.foods_summary)
+        .split(",")
+        .map((s) => `• <b>${escapeHTML(s.trim())}</b>`)
+        .join("\n");
+    } else {
+      itemsFormatted = "• <i>No specific items listed</i>";
+    }
+
+    const statusBadge = formatOrderStatusBadge(String(order.status));
+    const phoneNorm = normalizePhone(String(order.phone));
+    const phoneDisplay = String(order.phone || "N/A");
+    const dateFormatted = order.created_at ? new Date(String(order.created_at)).toLocaleString() : "Recent";
+    const campusFormatted = formatCampusName(String(order.campus));
+    const riderName = order.rider_actual_name || order.rider_name;
+
+    const detailText =
+      `📋 <b>ORDER DETAILS #${order.id}</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `📦 <b>Status:</b> ${statusBadge}\n` +
+      `🕒 <b>Date & Time:</b> ${dateFormatted}\n\n` +
+      `👤 <b>CUSTOMER INFORMATION</b>\n` +
+      `• <b>Name:</b> ${escapeHTML(String(order.user_name))}\n` +
+      `• <b>Phone:</b> <a href="tel:${phoneNorm}">${escapeHTML(phoneDisplay)}</a>\n` +
+      `• <b>Telegram ID:</b> <code>${order.telegram_id}</code>\n` +
+      `• <b>Campus / Drop-off:</b> ${escapeHTML(campusFormatted)}\n\n` +
+      `🏢 <b>RESTAURANT & MEAL</b>\n` +
+      `• <b>Restaurant:</b> ${escapeHTML(String(order.restaurant))}\n` +
+      `• <b>Meal Type:</b> ${escapeHTML(String(order.meal_type || "Standard"))}\n\n` +
+      `🍱 <b>FOOD ITEMS ORDERED:</b>\n` +
+      `${itemsFormatted}\n\n` +
+      `💰 <b>PAYMENT BREAKDOWN</b>\n` +
+      `• <b>Food Subtotal:</b> ${order.food_total} ETB\n` +
+      `• <b>Delivery Fee:</b> ${order.delivery_fee} ETB\n` +
+      `• <b>Grand Total:</b> <b>${order.total_price} ETB</b>\n` +
+      `• <b>Food Contract:</b> ${order.has_restaurant_contract ? "✅ Covered by Contract" : "❌ No"}\n` +
+      `• <b>Delivery Contract:</b> ${order.has_delivery_contract ? "✅ Covered by Contract" : "❌ No"}\n\n` +
+      `🛵 <b>ASSIGNED RIDER / DELIVERY</b>\n` +
+      `• <b>Rider:</b> ${riderName ? `<b>${escapeHTML(String(riderName))}</b>` : "⚠️ <i>Unassigned</i>"}\n` +
+      (order.rider_phone ? `• <b>Rider Phone:</b> <a href="tel:${normalizePhone(String(order.rider_phone))}">${escapeHTML(String(order.rider_phone))}</a>\n` : "") +
+      `━━━━━━━━━━━━━━━━━━━━`;
+
+    const rows: any[] = [];
+
+    // Quick status action buttons
+    const curStatus = String(order.status || "pending").toLowerCase();
+    const quickActions: any[] = [];
+    if (curStatus === "pending") {
+      quickActions.push(Markup.button.callback("🚴 Accept", `admin_order_set_status_${order.id}_accepted_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+    } else if (curStatus === "accepted") {
+      quickActions.push(Markup.button.callback("🚶 On the Way", `admin_order_set_status_${order.id}_on_the_way_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+    } else if (curStatus === "on_the_way") {
+      quickActions.push(Markup.button.callback("📦 Picked Up", `admin_order_set_status_${order.id}_picked_up_${backFilter}_${backPage}`));
+      quickActions.push(Markup.button.callback("❌ Cancel", `admin_order_set_status_${order.id}_cancelled_${backFilter}_${backPage}`));
+    } else if (curStatus === "picked_up") {
+      quickActions.push(Markup.button.callback("✅ Mark Delivered", `admin_order_set_status_${order.id}_delivered_${backFilter}_${backPage}`));
+    } else if (curStatus === "delivered" || curStatus === "cancelled") {
+      quickActions.push(Markup.button.callback("🔄 Reopen as Pending", `admin_order_set_status_${order.id}_pending_${backFilter}_${backPage}`));
+    }
+    if (quickActions.length > 0) {
+      rows.push(quickActions);
+    }
+
+    // Change status menu button + Contact customer button
+    const actionRow: any[] = [
+      Markup.button.callback("🔄 Change Status", `admin_order_status_menu_${order.id}_${backFilter}_${backPage}`),
+    ];
+    if (order.telegram_id && Number(order.telegram_id) > 1000) {
+      actionRow.push(Markup.button.url("💬 Chat Customer", `tg://user?id=${order.telegram_id}`));
+    }
+    rows.push(actionRow);
+
+    if (order.rider_telegram_id && Number(order.rider_telegram_id) > 1000) {
+      rows.push([Markup.button.url("🛵 Chat Rider", `tg://user?id=${order.rider_telegram_id}`)]);
+    }
+
+    rows.push([
+      Markup.button.callback("🔙 Back to Orders", `admin_orders_page_${backFilter}_${backPage}`),
     ]);
 
     if (ctx.callbackQuery) {
-      await ctx.editMessageText(text, {
-        parse_mode: "Markdown",
-        reply_markup: filterKeyboard.reply_markup,
-      });
-    } else {
-      await ctx.reply(text, {
-        parse_mode: "Markdown",
-        reply_markup: filterKeyboard.reply_markup,
-      });
+      try {
+        await ctx.editMessageText(detailText, {
+          parse_mode: "HTML",
+          reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+        });
+        return;
+      } catch (e) {}
     }
+    await ctx.reply(detailText, {
+      parse_mode: "HTML",
+      reply_markup: Markup.inlineKeyboard(rows).reply_markup,
+    });
   }
 
   // --- CONTRACT REQUESTS MANAGEMENT ---
