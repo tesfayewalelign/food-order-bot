@@ -276,7 +276,7 @@ async function runAtomicOrderTests() {
       await testDb.execute({ sql: "SELECT remaining_deliveries FROM delivery_contracts WHERE telegram_id = ?", args: [user4] })
     ).rows[0]?.remaining_deliveries;
 
-    assert(Number(remMeals4) === 9, "Meals decremented: 10 -> 9");
+    assert(Number(remMeals4) === 8, "Meals decremented by quantity: 10 - 2 = 8");
     assert(Number(remDel4) === 6, "Deliveries decremented: 8 - 2 = 6");
 
     // -------------------------------------------------------------

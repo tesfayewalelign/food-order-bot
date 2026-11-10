@@ -1047,8 +1047,18 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
 
   async function showOrderDetail(ctx: Context, orderId: number) {
     const orderRes = await db.execute({
-      sql: `SELECT o.*, r.phone as rider_phone, r.name as rider_actual_name, r.telegram_id as rider_telegram_id
+      sql: `SELECT o.*,
+                   CASE
+                     WHEN o.user_name IS NULL OR o.user_name IN ('Customer', '🍔 Order Food', '🍽️ Order Food', '') THEN p.name
+                     ELSE o.user_name
+                   END as effective_user_name,
+                   CASE
+                     WHEN o.phone IS NULL OR o.phone IN ('', '🍔 Order Food', '🍽️ Order Food', 'N/A') THEN p.phone
+                     ELSE o.phone
+                   END as effective_phone,
+                   r.phone as rider_phone, r.name as rider_actual_name, r.telegram_id as rider_telegram_id
             FROM orders o
+            LEFT JOIN profiles p ON o.telegram_id = p.telegram_id
             LEFT JOIN riders r ON o.rider_id = r.id
             WHERE o.id = ?`,
       args: [orderId],
@@ -1091,7 +1101,8 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     }
 
     const statusBadge = formatOrderStatusBadge(String(order.status));
-    const phoneDisplay = String(order.phone || "N/A");
+    const customerName = String((order as any).effective_user_name || order.user_name);
+    const phoneDisplay = String((order as any).effective_phone || order.phone || "N/A");
     const dateFormatted = order.created_at ? new Date(String(order.created_at)).toLocaleString() : "Recent";
     const campusFormatted = formatCampusName(String(order.campus));
     const riderName = order.rider_actual_name || order.rider_name;
@@ -1102,7 +1113,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       `📦 <b>Status:</b> ${statusBadge}\n` +
       `🕒 <b>Date & Time:</b> ${dateFormatted}\n\n` +
       `👤 <b>CUSTOMER INFORMATION</b>\n` +
-      `• <b>Name:</b> ${escapeHTML(String(order.user_name))}\n` +
+      `• <b>Name:</b> ${escapeHTML(customerName)}\n` +
       `• <b>Phone:</b> <code>${escapeHTML(phoneDisplay)}</code>\n` +
       `• <b>Telegram ID:</b> <code>${order.telegram_id}</code>\n` +
       `• <b>Campus / Drop-off:</b> ${escapeHTML(campusFormatted)}\n\n` +

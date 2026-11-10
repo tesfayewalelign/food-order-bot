@@ -12,9 +12,14 @@ export async function checkRestaurantContract(
     let sql =
       "SELECT * FROM restaurant_contracts WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0";
     let args: any[] = [userId];
-    if (restaurantId) {
+    if (restaurantId && !isNaN(Number(restaurantId)) && Number(restaurantId) > 0) {
       sql += " AND (restaurant_id = ? OR restaurant_name = ?)";
       args.push(Number(restaurantId), restaurantName || "");
+    } else if (restaurantName && restaurantName.trim()) {
+      sql += " AND restaurant_name = ?";
+      args.push(restaurantName.trim());
+    } else {
+      return null;
     }
     const result = await db.execute({ sql, args });
     return result.rows.length > 0 ? result.rows[0] : null;

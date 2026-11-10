@@ -173,7 +173,19 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       }
 
       const pendingOrdersRes = await db.execute({
-        sql: "SELECT * FROM orders WHERE status = 'pending' ORDER BY id DESC LIMIT 20",
+        sql: `SELECT o.*,
+                     CASE
+                       WHEN o.user_name IS NULL OR o.user_name IN ('Customer', '🍔 Order Food', '🍽️ Order Food', '') THEN p.name
+                       ELSE o.user_name
+                     END as effective_user_name,
+                     CASE
+                       WHEN o.phone IS NULL OR o.phone IN ('', '🍔 Order Food', '🍽️ Order Food', 'N/A') THEN p.phone
+                       ELSE o.phone
+                     END as effective_phone
+              FROM orders o
+              LEFT JOIN profiles p ON o.telegram_id = p.telegram_id
+              WHERE o.status = 'pending'
+              ORDER BY o.id DESC LIMIT 20`,
         args: [],
       });
       const pendingOrders = pendingOrdersRes.rows;
@@ -204,7 +216,9 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
       }
 
       for (const o of matchingOrders) {
-        const telLink = formatPhoneLink(String(o.phone));
+        const customerName = String((o as any).effective_user_name || o.user_name);
+        const customerPhone = String((o as any).effective_phone || o.phone);
+        const telLink = formatPhoneLink(customerPhone);
         const formattedItems = String(o.foods_summary || "")
           .split(",")
           .map((i) => `• ${escapeHTML(i.trim())}`)
@@ -212,7 +226,7 @@ export function setupDriverHandler(bot: Telegraf<Context>) {
 
         const msgText =
           `🛵 <b>New Order #${o.id}</b>\n\n` +
-          `👤 <b>Customer:</b> ${escapeHTML(String(o.user_name))}\n` +
+          `👤 <b>Customer:</b> ${escapeHTML(customerName)}\n` +
           `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
           `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(String(o.campus)))}\n` +
           `🍴 <b>Restaurant:</b> ${escapeHTML(String(o.restaurant))}\n\n` +

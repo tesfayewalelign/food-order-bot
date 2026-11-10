@@ -90,8 +90,14 @@ export interface UserState {
 export const userState = new Map<number, UserState>();
 
 export const resetUserState = (userId: number) => {
+  const existing = userState.get(userId);
   userState.set(userId, {
     step: "idle",
+    name: existing?.name,
+    phone: existing?.phone,
+    campus: existing?.campus,
+    username: existing?.username,
+    isRider: existing?.isRider,
     foods: [],
     cartFoods: [],
   });

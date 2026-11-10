@@ -14,6 +14,7 @@ import {
   adminReplyKeyboard,
 } from "../../helpers/keyboards.js";
 import { getUserRole } from "../../helpers/roles.js";
+import { isValidCustomerName, isValidPhoneNumber, normalizePhoneNumber } from "../../helpers/utils.js";
 
 function isContactMessage(
   msg: any
@@ -184,9 +185,17 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       });
       const profile = profRes.rows[0];
 
-      if (!profile) {
+      const isProfileValid =
+        profile &&
+        profile.name &&
+        profile.phone &&
+        isValidCustomerName(String(profile.name)) &&
+        isValidPhoneNumber(String(profile.phone));
+
+      if (!isProfileValid) {
         const state: UserState = await initUserState(userId);
         state.step = "profile_ask_name";
+        state.campus = profile?.campus ? String(profile.campus) : undefined;
         userState.set(userId, state);
         return ctx.reply(
           "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to get started:",
@@ -194,10 +203,11 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         );
       }
 
+      const normalizedPhone = normalizePhoneNumber(String(profile.phone));
       userState.set(userId, {
         step: "idle",
         name: String(profile.name),
-        phone: String(profile.phone),
+        phone: normalizedPhone,
         campus: String(profile.campus || ""),
         foods: [],
         cartFoods: [],
@@ -237,7 +247,11 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
     if (!state) return next();
 
     if (state.step === "profile_ask_name" && "text" in msg) {
-      state.name = msg.text.trim();
+      const inputName = msg.text.trim();
+      if (!isValidCustomerName(inputName)) {
+        return ctx.reply("⚠️ Please enter a valid full name (e.g., Abebe Kebede):");
+      }
+      state.name = inputName;
       state.step = "profile_ask_phone";
       userState.set(userId, state);
 
@@ -256,9 +270,17 @@ export function setupStartHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
       state.step === "profile_ask_phone" &&
       (isContactMessage(msg) || ("text" in msg && msg.text))
     ) {
-      const phone = isContactMessage(msg)
+      const rawPhone = isContactMessage(msg)
         ? msg.contact.phone_number
         : msg.text.trim();
+
+      if (!isValidPhoneNumber(rawPhone)) {
+        return ctx.reply(
+          "⚠️ Please provide a valid phone number (e.g., 0911223344 or tap 📱 Share Phone):"
+        );
+      }
+
+      const phone = normalizePhoneNumber(rawPhone);
       state.phone = phone;
       state.step = "idle";
       userState.set(userId, state);

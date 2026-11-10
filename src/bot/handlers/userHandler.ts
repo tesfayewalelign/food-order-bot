@@ -1,7 +1,7 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { db } from "../../config/db.js";
 import { Client } from "@libsql/client";
-import { userState, resetUserState, UserState } from "../../helpers/state.js";
+import { userState, resetUserState, initUserState, UserState } from "../../helpers/state.js";
 import {
   getMainMenuKeyboard,
   customerMenuKeyboard,
@@ -21,6 +21,7 @@ import { COMPANY_CONTACT } from "../../config/company.js";
 import { checkRestaurantContract, checkDeliveryContract } from "../../helpers/contracts.js";
 import { getUserRole } from "../../helpers/roles.js";
 import { getApplicableDeliveryPrice } from "../../helpers/deliveryPricing.js";
+import { isValidCustomerName, isValidPhoneNumber, normalizePhoneNumber } from "../../helpers/utils.js";
 import {
   getSpecialRestaurantKeyboard,
   getSpecialLocationKeyboard,
@@ -45,18 +46,6 @@ function isContactMessage(msg: any): msg is { contact: { phone_number: string } 
 const getCallbackData = (ctx: Context) =>
   (ctx.callbackQuery as { data?: string } | undefined)?.data ?? null;
 
-function normalizePhone(phone?: string): string {
-  if (!phone) return "";
-  let cleaned = phone.replace(/[^0-9+]/g, "");
-  if (cleaned.startsWith("09")) {
-    cleaned = "+2519" + cleaned.slice(2);
-  } else if (cleaned.startsWith("07")) {
-    cleaned = "+2517" + cleaned.slice(2);
-  } else if (cleaned.startsWith("251")) {
-    cleaned = "+" + cleaned;
-  }
-  return cleaned;
-}
 
 function escapeMarkdown(str?: string): string {
   if (!str) return "";
@@ -160,37 +149,55 @@ export async function executeNormalOrderTransaction(
   try {
     // 1. Decrement restaurant contract meals if applicable
     if (params.hasRestaurantContract) {
-      let restSql = `UPDATE restaurant_contracts
-            SET remaining_meals = remaining_meals - 1
-            WHERE id = (
-              SELECT id FROM restaurant_contracts
-              WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0`;
-      const restArgs: any[] = [params.userId];
+      const totalMeals = params.foods.reduce((acc, f) => acc + f.quantity, 0);
+      const hasRestId =
+        params.restaurantId !== undefined &&
+        params.restaurantId !== null &&
+        !isNaN(Number(params.restaurantId)) &&
+        Number(params.restaurantId) > 0;
+      const restaurantName = params.restaurant?.trim();
 
-      if (params.restaurantId) {
-        restSql += ` AND (restaurant_id = ? OR restaurant_name = ?)`;
-        restArgs.push(Number(params.restaurantId), params.restaurant || "");
+      let restSql: string;
+      let restArgs: any[];
+
+      if (hasRestId) {
+        restSql = `UPDATE restaurant_contracts
+              SET remaining_meals = remaining_meals - ?
+              WHERE id = (
+                SELECT id FROM restaurant_contracts
+                WHERE telegram_id = ?
+                  AND is_active = 1
+                  AND (restaurant_id = ? OR restaurant_name = ?)
+                  AND remaining_meals >= ?
+                LIMIT 1
+              )`;
+        restArgs = [
+          totalMeals,
+          params.userId,
+          Number(params.restaurantId),
+          restaurantName || "",
+          totalMeals,
+        ];
+      } else if (restaurantName) {
+        restSql = `UPDATE restaurant_contracts
+              SET remaining_meals = remaining_meals - ?
+              WHERE id = (
+                SELECT id FROM restaurant_contracts
+                WHERE telegram_id = ?
+                  AND is_active = 1
+                  AND restaurant_name = ?
+                  AND remaining_meals >= ?
+                LIMIT 1
+              )`;
+        restArgs = [totalMeals, params.userId, restaurantName, totalMeals];
+      } else {
+        throw new Error("Insufficient restaurant contract balance or no active contract found.");
       }
-      restSql += ` LIMIT 1)`;
 
-      let restRes = await tx.execute({
+      const restRes = await tx.execute({
         sql: restSql,
         args: restArgs,
       });
-
-      // Fallback if specific restaurant_id was not matched but active contract exists for user
-      if (restRes.rowsAffected === 0 && params.restaurantId) {
-        restRes = await tx.execute({
-          sql: `UPDATE restaurant_contracts
-                SET remaining_meals = remaining_meals - 1
-                WHERE id = (
-                  SELECT id FROM restaurant_contracts
-                  WHERE telegram_id = ? AND is_active = 1 AND remaining_meals > 0
-                  LIMIT 1
-                )`,
-          args: [params.userId],
-        });
-      }
 
       if (restRes.rowsAffected === 0) {
         throw new Error("Insufficient restaurant contract balance or no active contract found.");
@@ -320,26 +327,52 @@ export function handleUserFlow(
       }
 
       let state = userState.get(userId);
-      if (!state) {
+      if (!state || !state.phone || !state.name || !isValidCustomerName(state.name) || !isValidPhoneNumber(state.phone)) {
         const profRes = await db.execute({
           sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
           args: [userId],
         });
         const profile = profRes.rows[0];
 
-        state = {
-          step: profile ? "idle" : "profile_ask_name",
-          name: profile ? String(profile.name) : "",
-          phone: profile ? String(profile.phone) : "",
-          campus: profile ? String(profile.campus || "") : "",
-          foods: [],
-          cartFoods: [],
-        };
-        userState.set(userId, state);
+        if (!profile || !profile.name || !profile.phone || !isValidPhoneNumber(String(profile.phone)) || !isValidCustomerName(String(profile.name))) {
+          state = {
+            step: "profile_ask_name",
+            name: "",
+            phone: "",
+            campus: profile?.campus ? String(profile.campus) : "",
+            foods: [],
+            cartFoods: [],
+          };
+          userState.set(userId, state);
+          return ctx.reply(
+            "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to get started:",
+            { parse_mode: "Markdown" }
+          );
+        }
+
+        if (!state) {
+          state = {
+            step: "idle",
+            name: String(profile.name),
+            phone: normalizePhoneNumber(String(profile.phone)),
+            campus: String(profile.campus || ""),
+            foods: [],
+            cartFoods: [],
+          };
+          userState.set(userId, state);
+        } else {
+          state.name = String(profile.name);
+          state.phone = normalizePhoneNumber(String(profile.phone));
+          state.campus = state.campus || String(profile.campus || "");
+        }
       }
 
       if (state.step === "profile_ask_name" && isTextMessage(msg)) {
-        state.name = msg.text.trim();
+        const inputName = msg.text.trim();
+        if (!isValidCustomerName(inputName)) {
+          return ctx.reply("⚠️ Please enter a valid full name (e.g., Abebe Kebede):");
+        }
+        state.name = inputName;
         state.step = "profile_ask_phone";
         userState.set(userId, state);
 
@@ -358,9 +391,17 @@ export function handleUserFlow(
         state.step === "profile_ask_phone" &&
         (isContactMessage(msg) || isTextMessage(msg))
       ) {
-        const phone = isContactMessage(msg)
+        const rawPhone = isContactMessage(msg)
           ? msg.contact.phone_number
           : (msg as any).text.trim();
+
+        if (!isValidPhoneNumber(rawPhone)) {
+          return ctx.reply(
+            "⚠️ Please provide a valid phone number (e.g., 0911223344 or tap 📱 Share Phone):"
+          );
+        }
+
+        const phone = normalizePhoneNumber(rawPhone);
         state.phone = phone;
         state.step = "idle";
         userState.set(userId, state);
@@ -593,6 +634,25 @@ export function handleUserFlow(
         switch (msg.text) {
           case "🍽️ Order Food":
           case "🍔 Order Food": {
+            if (!isValidCustomerName(state.name || "") || !isValidPhoneNumber(state.phone || "")) {
+              const profRes = await db.execute({
+                sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
+                args: [userId],
+              });
+              const profile = profRes.rows[0];
+              if (!profile || !isValidCustomerName(String(profile.name || "")) || !isValidPhoneNumber(String(profile.phone || ""))) {
+                state.step = "profile_ask_name";
+                userState.set(userId, state);
+                return ctx.reply(
+                  "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to get started:",
+                  { parse_mode: "Markdown" }
+                );
+              }
+              state.name = String(profile.name);
+              state.phone = normalizePhoneNumber(String(profile.phone));
+              state.campus = state.campus || String(profile.campus || "");
+            }
+
             state.step = "profile_ask_campus";
             state.foods = [];
             state.hasRestaurantContract = false;
@@ -638,7 +698,7 @@ export function handleUserFlow(
             });
             const profile = profileRes.rows[0];
 
-            if (!profile || !profile.name || !profile.phone) {
+            if (!profile || !isValidCustomerName(String(profile.name || "")) || !isValidPhoneNumber(String(profile.phone || ""))) {
               state.step = "profile_ask_name";
               userState.set(userId, state);
               return ctx.reply(
@@ -648,13 +708,14 @@ export function handleUserFlow(
             }
 
             state.name = String(profile.name);
-            state.phone = String(profile.phone);
+            state.phone = normalizePhoneNumber(String(profile.phone));
             state.step = "so_ask_campus";
             state.soItems = [];
             state.soRestaurant = undefined;
             state.soRestaurantId = undefined;
             state.soLocation = undefined;
             state.soDeliveryCampus = undefined;
+            state.isSubmittingOrder = false;
             userState.set(userId, state);
 
             return ctx.reply(
@@ -680,9 +741,14 @@ export function handleUserFlow(
             });
             const profile = res.rows[0];
 
-            const name = String(profile?.name || state.name || ctx.from?.first_name || "N/A");
-            const phone = String(profile?.phone || state.phone || "N/A");
-            const campus = String(profile?.campus || state.campus || "N/A");
+            const name = isValidCustomerName(String(profile?.name || ""))
+              ? String(profile?.name)
+              : (isValidCustomerName(state.name || "") ? state.name : "Not set");
+            const rawPhone = isValidPhoneNumber(String(profile?.phone || ""))
+              ? String(profile?.phone)
+              : (isValidPhoneNumber(state.phone || "") ? state.phone : "");
+            const phone = rawPhone ? normalizePhoneNumber(rawPhone) : "Not set";
+            const campus = String(profile?.campus || state.campus || "Not set");
 
             const delContract = await checkDeliveryContract(userId);
             const foodContractsRes = await db.execute({
@@ -756,16 +822,38 @@ export function handleUserFlow(
 
     const userId = ctx.from!.id;
     let state = userState.get(userId);
-    if (!state) {
-      state = {
-        step: "idle",
-        name: ctx.from?.first_name || "User",
-        phone: "",
-        campus: data,
-        foods: [],
-        cartFoods: [],
-      };
-      userState.set(userId, state);
+    if (!state || !state.phone || !state.name || !isValidCustomerName(state.name) || !isValidPhoneNumber(state.phone)) {
+      const profRes = await db.execute({
+        sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
+        args: [userId],
+      });
+      const profile = profRes.rows[0];
+      if (profile && isValidCustomerName(String(profile.name || "")) && isValidPhoneNumber(String(profile.phone || ""))) {
+        if (!state) {
+          state = {
+            step: "idle",
+            name: String(profile.name),
+            phone: normalizePhoneNumber(String(profile.phone)),
+            campus: data,
+            foods: [],
+            cartFoods: [],
+          };
+          userState.set(userId, state);
+        } else {
+          state.name = String(profile.name);
+          state.phone = normalizePhoneNumber(String(profile.phone));
+          state.campus = data;
+        }
+      } else {
+        const newState = await initUserState(userId);
+        newState.step = "profile_ask_name";
+        newState.campus = data;
+        userState.set(userId, newState);
+        return ctx.reply(
+          "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to get started:",
+          { parse_mode: "Markdown" }
+        );
+      }
     }
 
     if (state.step === "so_ask_campus") {
@@ -1580,8 +1668,20 @@ export function handleUserFlow(
 
   // Display Order Summary
   async function showOrderSummary(ctx: Context, state: UserState) {
-    state.step = "confirm_order";
     const userId = ctx.from!.id;
+    if (!state.name || !state.phone || !isValidPhoneNumber(state.phone) || !isValidCustomerName(state.name)) {
+      const profRes = await db.execute({
+        sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
+        args: [userId],
+      });
+      const profile = profRes.rows[0];
+      if (profile && isValidCustomerName(String(profile.name || "")) && isValidPhoneNumber(String(profile.phone || ""))) {
+        state.name = String(profile.name);
+        state.phone = normalizePhoneNumber(String(profile.phone));
+        state.campus = state.campus || String(profile.campus || "");
+      }
+    }
+    state.step = "confirm_order";
 
     const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
     const foodSubtotal = state.hasRestaurantContract
@@ -1653,6 +1753,28 @@ export function handleUserFlow(
       return ctx.reply("⚠️ Session expired or order empty. Please start again with /start.");
     }
 
+    if (!state.name || !state.phone || !isValidPhoneNumber(state.phone) || !isValidCustomerName(state.name)) {
+      const profRes = await db.execute({
+        sql: "SELECT name, phone, campus FROM profiles WHERE telegram_id = ?",
+        args: [userId],
+      });
+      const profile = profRes.rows[0];
+      if (profile && isValidCustomerName(String(profile.name || "")) && isValidPhoneNumber(String(profile.phone || ""))) {
+        state.name = String(profile.name);
+        state.phone = normalizePhoneNumber(String(profile.phone));
+        state.campus = state.campus || String(profile.campus || "");
+      }
+    }
+
+    if (!state.name || !state.phone || !isValidCustomerName(state.name) || !isValidPhoneNumber(state.phone)) {
+      state.step = "profile_ask_name";
+      userState.set(userId, state);
+      return ctx.reply(
+        "👤 *Welcome to Campus Food Delivery!*\n\nPlease enter your full name to complete your profile before placing an order:",
+        { parse_mode: "Markdown" }
+      );
+    }
+
     if (state.isSubmittingOrder) {
       return; // Double-submit guard!
     }
@@ -1708,101 +1830,134 @@ export function handleUserFlow(
         foodsSummary,
       });
 
+      const itemsListFormatted = state.foods
+        .map((f) => `• ${escapeHTML(f.name)} × ${f.quantity}`)
+        .join("\n");
+
       orderCommitted = true;
       orderId = txResult.orderId;
+
+      // Order has committed safely. Clear in-flight items and mark submission complete immediately
+      // to protect against duplicate submission even if notification dispatch encounters network/Telegram errors.
+      state.foods = [];
+      state.cartFoods = [];
+      state.isSubmittingOrder = false;
 
       if (state.hasDeliveryContract) {
         const remAfter = txResult.remainingDeliveries ?? 0;
         deliveryContractNote = `\n\n🚚 *Delivery Contract Used:* ${totalItems} delivery units consumed (*${remAfter} deliveries remaining*).`;
       }
 
-      // 4. Notify active campus riders with normalized matching & fallback (Requirement 6 & 7)
-      const allActiveRiders = await db.execute({
-        sql: "SELECT id, telegram_id, name, phone, campus FROM riders WHERE (active IS NULL OR active = 1 OR active = '1') AND telegram_id IS NOT NULL AND telegram_id != 0 AND telegram_id != '0'",
-        args: [],
-      });
+      try {
+        // 4. Notify active campus riders with normalized matching & fallback (Requirement 6 & 7)
+        const allActiveRiders = await db.execute({
+          sql: "SELECT id, telegram_id, name, phone, campus FROM riders WHERE (active IS NULL OR active = 1 OR active = '1') AND telegram_id IS NOT NULL AND telegram_id != 0 AND telegram_id != '0'",
+          args: [],
+        });
 
-      console.log(`🔍 Order #${orderId} - Found ${allActiveRiders.rows.length} total activated rider(s) in DB.`);
+        console.log(`🔍 Order #${orderId} - Found ${allActiveRiders.rows.length} total activated rider(s) in DB.`);
 
-      const normOrderCampus = (state.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const normOrderCampus = (state.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-      let targetRiders = allActiveRiders.rows.filter((r) => {
-        const rNorm = String(r.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        return rNorm === normOrderCampus || rNorm.includes(normOrderCampus) || normOrderCampus.includes(rNorm);
-      });
+        let targetRiders = allActiveRiders.rows.filter((r) => {
+          const rNorm = String(r.campus || "").replace(/^campus_/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          return rNorm === normOrderCampus || rNorm.includes(normOrderCampus) || normOrderCampus.includes(rNorm);
+        });
 
-      if (targetRiders.length === 0) {
-        console.log(`ℹ️ No rider matched campus '${state.campus}' specifically. Broadcasting to all ${allActiveRiders.rows.length} active riders.`);
-        targetRiders = allActiveRiders.rows;
-      } else {
-        console.log(`🎯 Matched ${targetRiders.length} rider(s) for campus '${state.campus}'.`);
-      }
+        if (targetRiders.length === 0) {
+          console.log(`ℹ️ No rider matched campus '${state.campus}' specifically. Broadcasting to all ${allActiveRiders.rows.length} active riders.`);
+          targetRiders = allActiveRiders.rows;
+        } else {
+          console.log(`🎯 Matched ${targetRiders.length} rider(s) for campus '${state.campus}'.`);
+        }
 
-      const telLink = formatPhoneLink(state.phone);
-      const itemsListFormatted = state.foods
-        .map((f) => `• ${escapeHTML(f.name)} × ${f.quantity}`)
-        .join("\n");
+        const telLink = formatPhoneLink(state.phone);
 
-      const riderMsgHTML =
-        `🛵 <b>New Order #${orderId}</b>\n\n` +
-        `👤 <b>Customer:</b> ${escapeHTML(state.name || "User")}\n` +
-        `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
-        `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(state.campus))}\n` +
-        `🍴 <b>Restaurant:</b> ${escapeHTML(state.restaurant || "N/A")}\n\n` +
-        `🍱 <b>Order Summary:</b>\n${itemsListFormatted}\n\n` +
-        `🍽️ <b>Food Contract:</b> ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
-        `🚚 <b>Delivery Contract:</b> ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
-        `💰 <b>Total Price:</b> ${grandTotal} ETB`;
+        const riderMsgHTML =
+          `🛵 <b>New Order #${orderId}</b>\n\n` +
+          `👤 <b>Customer:</b> ${escapeHTML(state.name || "User")}\n` +
+          `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
+          `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(state.campus))}\n` +
+          `🍴 <b>Restaurant:</b> ${escapeHTML(state.restaurant || "N/A")}\n\n` +
+          `🍱 <b>Order Summary:</b>\n${itemsListFormatted}\n\n` +
+          `🍽️ <b>Food Contract:</b> ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
+          `🚚 <b>Delivery Contract:</b> ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
+          `💰 <b>Total Price:</b> ${grandTotal} ETB`;
 
-      const riderKeyboard = Markup.inlineKeyboard([
-        [
-          Markup.button.callback("✅ Accept Order", `accept_order_${orderId}`),
-          Markup.button.callback("❌ Reject", `reject_order_${orderId}`),
-        ],
-      ]);
+        const riderKeyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.callback("✅ Accept Order", `accept_order_${orderId}`),
+            Markup.button.callback("❌ Reject", `reject_order_${orderId}`),
+          ],
+        ]);
 
-      for (const r of targetRiders) {
-        const tid = Number(r.telegram_id);
-        if (tid && !isNaN(tid)) {
-          try {
-            console.log(`📡 Sending order #${orderId} notification to rider ${r.name} (Telegram ID: ${tid})...`);
-            await bot.telegram.sendMessage(tid, riderMsgHTML, {
-              parse_mode: "HTML",
-              reply_markup: riderKeyboard.reply_markup,
-            });
-            console.log(`✅ Successfully sent order #${orderId} notification to rider ${r.name} (${tid})!`);
-          } catch (e) {
-            console.error(`⚠️ Failed HTML notification to rider ${r.name} (${tid}), attempting plain text fallback:`, e);
+        for (const r of targetRiders) {
+          const tid = Number(r.telegram_id);
+          if (tid && !isNaN(tid)) {
             try {
-              const plainMsg = riderMsgHTML.replace(/<[^>]+>/g, "");
-              await bot.telegram.sendMessage(tid, plainMsg, {
+              console.log(`📡 Sending order #${orderId} notification to rider ${r.name} (Telegram ID: ${tid})...`);
+              await bot.telegram.sendMessage(tid, riderMsgHTML, {
+                parse_mode: "HTML",
                 reply_markup: riderKeyboard.reply_markup,
               });
-              console.log(`✅ Successfully sent fallback order #${orderId} notification to rider ${r.name} (${tid})!`);
-            } catch (err2) {
-              console.error(`❌ Failed plain text notification to rider ${r.name} (${tid}):`, err2);
+              console.log(`✅ Successfully sent order #${orderId} notification to rider ${r.name} (${tid})!`);
+            } catch (e) {
+              console.error(`⚠️ Failed HTML notification to rider ${r.name} (${tid}), attempting plain text fallback:`, e);
+              try {
+                const plainMsg = riderMsgHTML.replace(/<[^>]+>/g, "");
+                await bot.telegram.sendMessage(tid, plainMsg, {
+                  reply_markup: riderKeyboard.reply_markup,
+                });
+                console.log(`✅ Successfully sent fallback order #${orderId} notification to rider ${r.name} (${tid})!`);
+              } catch (err2) {
+                console.error(`❌ Failed plain text notification to rider ${r.name} (${tid}):`, err2);
+              }
             }
           }
         }
-      }
 
-      // 5. Respond to user
-      try {
-        await ctx.editMessageText(
-          `✅ *Order #${orderId} Placed Successfully!*\n\n` +
-            `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
-          { parse_mode: "Markdown" }
-        );
-      } catch (editErr) {
-        console.error("⚠️ Failed editing message, sending fallback reply:", editErr);
-        await ctx.reply(
-          `✅ *Order #${orderId} Placed Successfully!*\n\n` +
-            `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
-          { parse_mode: "Markdown" }
-        );
-      }
+        // 4B. Notify Admins about the new normal order
+        const adminMsgHTML =
+          `📋 <b>New Normal Order #${orderId}</b>\n\n` +
+          `👤 <b>Customer:</b> ${escapeHTML(state.name || "Customer")}\n` +
+          `📞 <b>Phone:</b> ${escapeHTML(telLink)}\n` +
+          `🏫 <b>Campus:</b> ${escapeHTML(formatCampusName(state.campus))}\n` +
+          `🍴 <b>Restaurant:</b> ${escapeHTML(state.restaurant || "N/A")}\n\n` +
+          `🍱 <b>Order Summary:</b>\n${itemsListFormatted}\n\n` +
+          `🍽️ <b>Food Contract:</b> ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
+          `🚚 <b>Delivery Contract:</b> ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
+          `💰 <b>Total Price:</b> ${grandTotal} ETB`;
 
-      resetUserState(userId);
+        for (const adminId of ADMIN_IDS) {
+          try {
+            await bot.telegram.sendMessage(adminId, adminMsgHTML, {
+              parse_mode: "HTML",
+            });
+          } catch (adminErr) {
+            console.error(`⚠️ Failed to notify admin ${adminId} of order #${orderId}:`, adminErr);
+          }
+        }
+
+        // 5. Respond to user
+        try {
+          await ctx.editMessageText(
+            `✅ *Order #${orderId} Placed Successfully!*\n\n` +
+              `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
+            { parse_mode: "Markdown" }
+          );
+        } catch (editErr) {
+          console.error("⚠️ Failed editing message, sending fallback reply:", editErr);
+          await ctx.reply(
+            `✅ *Order #${orderId} Placed Successfully!*\n\n` +
+              `Your order has been sent to our campus riders. We will notify you as soon as a rider accepts your order!${deliveryContractNote}`,
+            { parse_mode: "Markdown" }
+          );
+        }
+      } catch (notifyErr) {
+        console.error(`⚠️ Post-commit notification error for order #${orderId}:`, notifyErr);
+      } finally {
+        resetUserState(userId);
+      }
     } catch (err: any) {
       console.error("Confirm order error:", err);
       state.isSubmittingOrder = false;
@@ -1811,6 +1966,8 @@ export function handleUserFlow(
           ? `❌ Order failed: ${err.message}`
           : "❌ Order submission failed. Please try again.";
         await ctx.reply(errorMsg);
+      } else {
+        resetUserState(userId);
       }
     }
   });
