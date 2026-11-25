@@ -65,7 +65,7 @@ export async function hasActiveRestaurantContract(userId: number, restaurantId?:
 export async function hasActiveDeliveryContract(userId: number): Promise<boolean> {
   try {
     const result = await db.execute({
-      sql: "SELECT id FROM delivery_contracts WHERE telegram_id = ? AND is_active = 1",
+      sql: "SELECT id FROM delivery_contracts WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries > 0",
       args: [userId],
     });
     return result.rows.length > 0;

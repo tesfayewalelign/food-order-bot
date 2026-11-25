@@ -1348,7 +1348,7 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         );
       } catch (e) { }
     } else {
-      // Check duplicate active contract first
+      // Check duplicate active contract first (only blocks if remaining_deliveries > 0)
       const hasActive = await hasActiveDeliveryContract(telegramId);
       if (hasActive) {
         await db.execute({
@@ -1357,6 +1357,12 @@ export function setupAdminHandler(bot: Telegraf<Context>, ADMIN_IDS: number[]) {
         });
         return ctx.editMessageText(`ℹ️ *Customer already has an active delivery contract.*`, { parse_mode: "Markdown" });
       }
+
+      // Close any exhausted contracts before activating the new 30-delivery contract
+      await db.execute({
+        sql: `UPDATE delivery_contracts SET is_active = 0 WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries <= 0`,
+        args: [telegramId],
+      });
 
       await db.execute({
         sql: `INSERT INTO delivery_contracts (telegram_id, campus, remaining_deliveries, is_active)

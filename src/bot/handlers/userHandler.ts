@@ -210,13 +210,14 @@ export async function executeNormalOrderTransaction(
       const totalItems = params.foods.reduce((acc, f) => acc + f.quantity, 0);
       const delRes = await tx.execute({
         sql: `UPDATE delivery_contracts
-              SET remaining_deliveries = remaining_deliveries - ?
+              SET remaining_deliveries = remaining_deliveries - ?,
+                  is_active = CASE WHEN remaining_deliveries - ? <= 0 THEN 0 ELSE 1 END
               WHERE id = (
                 SELECT id FROM delivery_contracts
                 WHERE telegram_id = ? AND is_active = 1 AND remaining_deliveries >= ?
                 LIMIT 1
               )`,
-        args: [totalItems, params.userId, totalItems],
+        args: [totalItems, totalItems, params.userId, totalItems],
       });
 
       if (delRes.rowsAffected === 0) {
@@ -1520,7 +1521,77 @@ export function handleUserFlow(
     }
   });
 
-  // Done Selecting Foods -> Ask Delivery Contract Question
+  async function hasPendingDeliveryContractRequest(userId: number): Promise<boolean> {
+    const res = await db.execute({
+      sql: `SELECT id FROM contract_requests
+            WHERE telegram_id = ? AND request_type = 'delivery_contract' AND status = 'pending'
+            LIMIT 1`,
+      args: [userId],
+    });
+    return res.rows.length > 0;
+  }
+
+  async function applyOrPromptDeliveryContract(ctx: Context, state: UserState, editExisting: boolean) {
+    const userId = ctx.from!.id;
+    const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
+    const contract = await checkDeliveryContract(userId);
+
+    const sendOrEdit = async (text: string, replyMarkup: any) => {
+      if (editExisting && ctx.callbackQuery) {
+        return ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: replyMarkup });
+      }
+      return ctx.reply(text, { parse_mode: "Markdown", reply_markup: replyMarkup });
+    };
+
+    if (contract && Number(contract.remaining_deliveries) >= totalItems) {
+      state.hasDeliveryContract = true;
+      await ctx.reply(
+        `🎫 *Delivery Contract Active!*\n\n📊 Balance: *${contract.remaining_deliveries} deliveries remaining*\n🚚 Order contains: *${totalItems} food items* (${totalItems} deliveries will be deducted)`,
+        { parse_mode: "Markdown" }
+      );
+      return showOrderSummary(ctx, state);
+    }
+
+    state.hasDeliveryContract = false;
+    const isPending = await hasPendingDeliveryContractRequest(userId);
+
+    if (isPending) {
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 Check Approval / Use Contract", "del_contract_yes")],
+        [Markup.button.callback("➡️ Continue without Contract", "continue_no_del_contract")],
+      ]);
+      return sendOrEdit(
+        "⏳ *Your delivery contract request is pending admin approval.*\n\nOnce approved, tap *Check Approval / Use Contract* below, or continue with normal delivery.",
+        kb.reply_markup
+      );
+    }
+
+    if (contract) {
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("📩 Request New Contract", "req_del_contract")],
+        [Markup.button.callback("Continue with Normal Delivery", "continue_no_del_contract")],
+      ]);
+      return sendOrEdit(
+        `⚠️ *Insufficient delivery contract balance.*\n\nYour contract has *${contract.remaining_deliveries} deliveries remaining*, but your order contains *${totalItems} food items* (${totalItems} required).`,
+        kb.reply_markup
+      );
+    }
+
+    if (!editExisting) {
+      return ctx.reply("🚚 *Do you have a delivery contract?*", {
+        parse_mode: "Markdown",
+        reply_markup: deliveryContractKeyboard.reply_markup,
+      });
+    }
+
+    const kb = Markup.inlineKeyboard([
+      [Markup.button.callback("📩 Request Delivery Contract", "req_del_contract")],
+      [Markup.button.callback("Continue without Contract", "continue_no_del_contract")],
+    ]);
+    return sendOrEdit("⚠️ *You do not have an active delivery contract (0 remaining).*", kb.reply_markup);
+  }
+
+  // Done Selecting Foods -> Auto-apply active delivery contract or ask
   bot.action("done_food", async (ctx) => {
     ctx.answerCbQuery().catch(() => {});
     const userId = ctx.from!.id;
@@ -1531,14 +1602,7 @@ export function handleUserFlow(
     }
 
     state.step = "ask_delivery_contract";
-
-    await ctx.reply(
-      "🚚 *Do you have a delivery contract?*",
-      {
-        parse_mode: "Markdown",
-        reply_markup: deliveryContractKeyboard.reply_markup,
-      }
-    );
+    return applyOrPromptDeliveryContract(ctx, state, false);
   });
 
   // Delivery Contract Choice Handlers
@@ -1548,45 +1612,7 @@ export function handleUserFlow(
     const state = userState.get(userId);
     if (!state) return;
 
-    const totalItems = state.foods.reduce((acc, f) => acc + f.quantity, 0);
-    const contract = await checkDeliveryContract(userId);
-
-    if (contract && Number(contract.remaining_deliveries) >= totalItems) {
-      state.hasDeliveryContract = true;
-      await ctx.reply(
-        `🎫 *Delivery Contract Active!*\n\n📊 Balance: *${contract.remaining_deliveries} deliveries remaining*\n🚚 Order contains: *${totalItems} food items* (${totalItems} deliveries will be deducted)`,
-        { parse_mode: "Markdown" }
-      );
-      return showOrderSummary(ctx, state);
-    } else if (contract) {
-      state.hasDeliveryContract = false;
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback("📩 Request New Contract", "req_del_contract")],
-        [Markup.button.callback("Continue with Normal Delivery", "continue_no_del_contract")],
-      ]);
-
-      await ctx.editMessageText(
-        `⚠️ *Insufficient delivery contract balance.*\n\nYour contract has *${contract.remaining_deliveries} deliveries remaining*, but your order contains *${totalItems} food items* (${totalItems} required).`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: kb.reply_markup,
-        }
-      );
-    } else {
-      state.hasDeliveryContract = false;
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback("📩 Request Delivery Contract", "req_del_contract")],
-        [Markup.button.callback("Continue without Contract", "continue_no_del_contract")],
-      ]);
-
-      await ctx.editMessageText(
-        "⚠️ *You do not have an active delivery contract (0 remaining).*",
-        {
-          parse_mode: "Markdown",
-          reply_markup: kb.reply_markup,
-        }
-      );
-    }
+    return applyOrPromptDeliveryContract(ctx, state, true);
   });
 
   bot.action("del_contract_no", async (ctx) => {
@@ -1616,6 +1642,19 @@ export function handleUserFlow(
     if (!state) return;
 
     try {
+      const existingPending = await hasPendingDeliveryContractRequest(userId);
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 Check Approval / Use Contract", "del_contract_yes")],
+        [Markup.button.callback("➡️ Continue without Contract", "continue_no_del_contract")],
+      ]);
+
+      if (existingPending) {
+        return ctx.editMessageText(
+          "⏳ *Your delivery contract request is already pending admin approval.*\n\nOnce approved, tap *Check Approval / Use Contract* below, or continue with normal delivery.",
+          { parse_mode: "Markdown", reply_markup: kb.reply_markup }
+        );
+      }
+
       const usernameTag = ctx.from?.username ? `@${ctx.from.username}` : "N/A";
 
       const insertRes = await db.execute({
@@ -1659,7 +1698,13 @@ export function handleUserFlow(
       }
 
       state.hasDeliveryContract = false;
-      return showOrderSummary(ctx, state);
+      return ctx.editMessageText(
+        "📩 *Your Delivery Contract Request has been submitted!*\n\nOnce admin approves it (30 deliveries), tap *Check Approval / Use Contract* below, or continue without a contract.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: kb.reply_markup,
+        }
+      );
     } catch (err) {
       console.error("Request delivery contract error:", err);
       return showOrderSummary(ctx, state);
