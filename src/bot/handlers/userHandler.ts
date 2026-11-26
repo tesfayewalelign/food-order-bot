@@ -1962,6 +1962,9 @@ export function handleUserFlow(
         }
 
         // 4B. Notify Admins about the new normal order
+        const deliveryContractLabel = state.hasDeliveryContract
+          ? `Yes (${txResult.remainingDeliveries ?? 0} remaining)`
+          : "No";
         const adminMsgHTML =
           `📋 <b>New Normal Order #${orderId}</b>\n\n` +
           `👤 <b>Customer:</b> ${escapeHTML(state.name || "Customer")}\n` +
@@ -1970,7 +1973,7 @@ export function handleUserFlow(
           `🍴 <b>Restaurant:</b> ${escapeHTML(state.restaurant || "N/A")}\n\n` +
           `🍱 <b>Order Summary:</b>\n${itemsListFormatted}\n\n` +
           `🍽️ <b>Food Contract:</b> ${state.hasRestaurantContract ? "Yes" : "No"}\n` +
-          `🚚 <b>Delivery Contract:</b> ${state.hasDeliveryContract ? "Yes" : "No"}\n\n` +
+          `🚚 <b>Delivery Contract:</b> ${deliveryContractLabel}\n\n` +
           `💰 <b>Total Price:</b> ${grandTotal} ETB`;
 
         for (const adminId of ADMIN_IDS) {
